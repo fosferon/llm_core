@@ -1,6 +1,9 @@
 # LlmCore
 
-**TODO: Add description**
+Shared LLM orchestration primitives (routing, inference, memory pipelines)
+extracted from DevMan for reuse in HuMan and tooling projects.
+
+* [Configuration guide](docs/configuration.md)
 
 ## Installation
 

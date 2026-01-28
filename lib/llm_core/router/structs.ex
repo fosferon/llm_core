@@ -3,36 +3,81 @@ defmodule LlmCore.Router.RouteEntry do
   Represents a routing rule entry mapping a task type to an agent alias.
   """
 
+  @capability_keys [
+    :streaming,
+    :structured_output,
+    :tool_use,
+    :vision,
+    :reasoning,
+    :attachment,
+    :attachments,
+    :temperature,
+    :models,
+    :max_context
+  ]
+
   @type t :: %__MODULE__{
           alias: String.t(),
-          mode: :abstracted | :passthrough
+          mode: :abstracted | :passthrough,
+          capabilities: map()
         }
 
   @enforce_keys [:alias]
-  defstruct [:alias, mode: :abstracted]
+  defstruct [:alias, mode: :abstracted, capabilities: %{}]
 
   @doc """
   Builds a route entry from YAML (string, list, or map).
   """
   @spec from_config(term()) :: t() | nil
-  def from_config(str) when is_binary(str), do: %__MODULE__{alias: str, mode: :abstracted}
+  def from_config(str) when is_binary(str),
+    do: %__MODULE__{alias: str, mode: :abstracted, capabilities: %{}}
 
   def from_config([alias, mode]) when is_binary(alias) do
-    %__MODULE__{alias: alias, mode: normalize_mode(mode)}
+    %__MODULE__{alias: alias, mode: normalize_mode(mode), capabilities: %{}}
   end
 
   def from_config(%{"alias" => alias} = map) when is_binary(alias) do
-    %__MODULE__{alias: alias, mode: normalize_mode(Map.get(map, "mode"))}
+    %__MODULE__{
+      alias: alias,
+      mode: normalize_mode(Map.get(map, "mode")),
+      capabilities: normalize_capabilities(Map.get(map, "capabilities"))
+    }
   end
 
-  def from_config(%{alias: alias, mode: mode}) when is_binary(alias) do
-    %__MODULE__{alias: alias, mode: normalize_mode(mode)}
+  def from_config(%{alias: alias} = map) when is_binary(alias) do
+    %__MODULE__{
+      alias: alias,
+      mode: normalize_mode(Map.get(map, :mode)),
+      capabilities: normalize_capabilities(Map.get(map, :capabilities))
+    }
   end
 
   def from_config(_), do: nil
 
   defp normalize_mode(mode) when mode in ["passthrough", :passthrough], do: :passthrough
   defp normalize_mode(_), do: :abstracted
+
+  defp normalize_capabilities(capabilities) when is_map(capabilities) do
+    Map.new(capabilities, fn
+      {key, value} when is_binary(key) ->
+        atom_key =
+          key
+          |> String.replace("-", "_")
+          |> String.downcase()
+          |> find_capability_atom()
+
+        {atom_key || key, value}
+
+      pair ->
+        pair
+    end)
+  end
+
+  defp normalize_capabilities(_), do: %{}
+
+  defp find_capability_atom(name) do
+    Enum.find(@capability_keys, fn atom -> Atom.to_string(atom) == name end)
+  end
 end
 
 defmodule LlmCore.Router.RoutingTable do

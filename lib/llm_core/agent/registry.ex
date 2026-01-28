@@ -48,26 +48,22 @@ defmodule LlmCore.Agent.Registry do
   use GenServer
 
   alias LlmCore.Agent
+  alias LlmCore.Provider.Definition
+  alias LlmCore.Provider.Registry, as: ProviderRegistry
+
+  alias MapSet
+  alias LlmCore.Provider.Registry, as: ProviderRegistry
+  alias LlmCore.Provider.Definition
 
   @default_name __MODULE__
 
-  # Known provider modules to scan during auto-discovery
-  @known_providers [
-    LlmCore.LLM.ClaudeCode,
-    LlmCore.LLM.GeminiCLI,
-    LlmCore.LLM.CodexCLI,
-    LlmCore.LLM.OpenAI,
-    LlmCore.LLM.Zai
+  @fallback_providers [
+    {"claude", LlmCore.LLM.ClaudeCode},
+    {"gemini", LlmCore.LLM.GeminiCLI},
+    {"codex", LlmCore.LLM.CodexCLI},
+    {"openai", LlmCore.LLM.OpenAI},
+    {"zai", LlmCore.LLM.Zai}
   ]
-
-  # Default agent names for auto-discovered providers
-  @provider_default_names %{
-    LlmCore.LLM.ClaudeCode => "claude",
-    LlmCore.LLM.GeminiCLI => "gemini",
-    LlmCore.LLM.CodexCLI => "codex",
-    LlmCore.LLM.OpenAI => "openai",
-    LlmCore.LLM.Zai => "zai"
-  }
 
   ## Client API
 
@@ -206,11 +202,19 @@ defmodule LlmCore.Agent.Registry do
     GenServer.call(server, {:update, name, config})
   end
 
+  @doc """
+  Synchronizes registered agents with provider definitions from TOML config.
+  """
+  @spec sync_with_providers(GenServer.server()) :: :ok
+  def sync_with_providers(server \\ @default_name) do
+    GenServer.cast(server, :sync_with_providers)
+  end
+
   ## Server Callbacks
 
   @impl true
   def init(%{auto_discover: auto_discover}) do
-    state = %{agents: %{}}
+    state = %{agents: %{}, auto_agents: MapSet.new()}
 
     state =
       if auto_discover do
@@ -229,7 +233,9 @@ defmodule LlmCore.Agent.Registry do
         if Map.has_key?(state.agents, name) do
           {:reply, {:error, :already_registered}, state}
         else
-          new_state = put_in(state.agents[name], agent)
+          new_agents = Map.put(state.agents, name, agent)
+          new_auto = MapSet.delete(state.auto_agents, name)
+          new_state = %{state | agents: new_agents, auto_agents: new_auto}
           {:reply, :ok, new_state}
         end
 
@@ -240,7 +246,12 @@ defmodule LlmCore.Agent.Registry do
 
   @impl true
   def handle_call({:unregister, name}, _from, state) do
-    new_state = %{state | agents: Map.delete(state.agents, name)}
+    new_state = %{
+      state
+      | agents: Map.delete(state.agents, name),
+        auto_agents: MapSet.delete(state.auto_agents, name)
+    }
+
     {:reply, :ok, new_state}
   end
 
@@ -263,7 +274,7 @@ defmodule LlmCore.Agent.Registry do
     case Map.fetch(state.agents, name) do
       {:ok, agent} ->
         updated_agent = %{agent | config: config}
-        new_state = put_in(state.agents[name], updated_agent)
+        new_state = %{state | agents: Map.put(state.agents, name, updated_agent)}
         {:reply, :ok, new_state}
 
       :error ->
@@ -271,32 +282,108 @@ defmodule LlmCore.Agent.Registry do
     end
   end
 
+  @impl true
+  def handle_cast(:sync_with_providers, state) do
+    {:noreply, register_from_definitions(state, ProviderRegistry.available())}
+  end
+
   ## Private Functions
 
-  # Auto-discover provider modules and register them with default names.
-  #
-  # Provider availability (API keys / CLI presence) is enforced by providers at call time.
   defp auto_discover_providers(state) do
-    Enum.reduce(@known_providers, state, fn provider_module, acc_state ->
-      # Check if module exists and implements the behaviour
-      if provider_usable?(provider_module) do
-        default_name =
-          Map.get(@provider_default_names, provider_module, default_name_for(provider_module))
+    case ProviderRegistry.available() do
+      [] -> register_fallback_providers(state)
+      providers -> register_from_definitions(state, providers)
+    end
+  end
 
-        case Agent.new(default_name, provider_module, %{}) do
-          {:ok, agent} ->
-            put_in(acc_state.agents[default_name], agent)
-
-          {:error, _} ->
-            acc_state
-        end
+  defp register_fallback_providers(state) do
+    Enum.reduce(@fallback_providers, state, fn {name, module}, acc_state ->
+      if provider_usable?(module) do
+        register_agent(acc_state, name, module, %{}, true)
       else
         acc_state
       end
     end)
   end
 
-  # Check if a provider module is usable (loaded and implements required callbacks).
+  defp register_from_definitions(state, providers) do
+    manual_agents = Map.drop(state.agents, MapSet.to_list(state.auto_agents))
+    base_state = %{state | agents: manual_agents, auto_agents: MapSet.new()}
+
+    Enum.reduce(providers, base_state, fn %Definition{} = definition, acc_state ->
+      config =
+        definition.agent_config
+        |> normalize_agent_config()
+        |> maybe_put_model(definition.default_model)
+
+      aliases =
+        definition.aliases
+        |> List.wrap()
+        |> Enum.reject(&is_nil/1)
+        |> case do
+          [] -> [definition.default_agent || definition.id]
+          list -> list
+        end
+
+      Enum.reduce(aliases, acc_state, fn alias, state_acc ->
+        register_agent(state_acc, alias, definition.module, config, true)
+      end)
+    end)
+  end
+
+  defp register_agent(state, nil, _module, _config, _auto?), do: state
+
+  defp register_agent(state, name, module, config, auto?) do
+    normalized_name = to_string(name)
+
+    cond do
+      Map.has_key?(state.agents, normalized_name) and
+          not MapSet.member?(state.auto_agents, normalized_name) ->
+        state
+
+      true ->
+        case Agent.new(normalized_name, module, config) do
+          {:ok, agent} ->
+            new_agents = Map.put(state.agents, normalized_name, agent)
+
+            new_auto =
+              if auto?,
+                do: MapSet.put(state.auto_agents, normalized_name),
+                else: state.auto_agents
+
+            %{state | agents: new_agents, auto_agents: new_auto}
+
+          {:error, _} ->
+            state
+        end
+    end
+  end
+
+  defp normalize_agent_config(nil), do: %{}
+
+  defp normalize_agent_config(map) when is_map(map) do
+    Map.new(map, fn
+      {key, value} when is_atom(key) ->
+        {key, value}
+
+      {key, value} when is_binary(key) ->
+        new_key =
+          try do
+            String.to_existing_atom(key)
+          rescue
+            ArgumentError -> key
+          end
+
+        {new_key, value}
+
+      other ->
+        other
+    end)
+  end
+
+  defp maybe_put_model(map, nil), do: map
+  defp maybe_put_model(map, model) when is_map(map), do: Map.put_new(map, :model, model)
+
   defp provider_usable?(module) do
     Code.ensure_loaded?(module) and
       function_exported?(module, :send, 2) and
@@ -304,14 +391,5 @@ defmodule LlmCore.Agent.Registry do
       function_exported?(module, :available?, 0) and
       function_exported?(module, :capabilities, 0) and
       function_exported?(module, :provider_type, 0)
-  end
-
-  # Generate a default name from module name
-  defp default_name_for(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-    |> String.replace("_", "-")
   end
 end

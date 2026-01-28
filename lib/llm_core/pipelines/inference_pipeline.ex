@@ -4,6 +4,7 @@ defmodule LlmCore.Pipelines.InferencePipeline.Context do
   """
 
   defstruct prompt: nil,
+            packet: nil,
             task_type: nil,
             mode: :send,
             opts: [],
@@ -56,6 +57,29 @@ defmodule LlmCore.Pipelines.InferencePipeline do
   end
 
   # --- Stage callbacks ----------------------------------------------------
+
+  def normalize_request(
+        %Context{
+          prompt: %{__struct__: CommBus.Protocol.Packet} = packet,
+          task_type: task_type,
+          opts: opts
+        } = ctx,
+        _opts
+      ) do
+    with {:ok, messages} <- normalize_packet_messages(packet) do
+      derived_task_type = packet_task_type(packet) || task_type
+
+      %{
+        ctx
+        | prompt: messages,
+          packet: packet,
+          task_type: normalize_task_type(derived_task_type),
+          opts: attach_commbus_context(opts, packet)
+      }
+    else
+      {:error, reason} -> %{ctx | result: {:error, reason}}
+    end
+  end
 
   def normalize_request(%Context{prompt: prompt, task_type: task_type} = ctx, _opts) do
     with {:ok, normalized_prompt} <- normalize_prompt(prompt) do
@@ -256,6 +280,88 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     unless Manager.started?(__MODULE__) do
       :ok = Manager.start(__MODULE__, sync: true)
     end
+  end
+
+  defp normalize_packet_messages(packet) do
+    messages =
+      packet
+      |> Map.get(:messages, [])
+      |> Enum.map(&normalize_packet_message/1)
+      |> Enum.filter(& &1)
+
+    if messages == [] do
+      {:error, :empty_packet_messages}
+    else
+      {:ok, messages}
+    end
+  end
+
+  defp normalize_packet_message(%{content: content} = message) when is_binary(content) do
+    metadata =
+      message
+      |> Map.get(:metadata) ||
+        Map.get(message, "metadata") ||
+        %{}
+
+    %{
+      role: normalize_packet_role(Map.get(message, :role) || Map.get(message, "role")),
+      content: content,
+      metadata: metadata
+    }
+  end
+
+  defp normalize_packet_message(_), do: nil
+
+  defp normalize_packet_role(role) when role in [:system, :user, :assistant, :tool], do: role
+  defp normalize_packet_role(:function), do: :tool
+
+  defp normalize_packet_role(role) when is_binary(role) do
+    case String.downcase(String.trim(role)) do
+      "system" -> :system
+      "assistant" -> :assistant
+      "tool" -> :tool
+      "function" -> :tool
+      _ -> :user
+    end
+  end
+
+  defp normalize_packet_role(_), do: :user
+
+  defp packet_task_type(packet) do
+    metadata = Map.get(packet, :metadata, %{})
+
+    fetch_indifferent(metadata, :task_type) ||
+      fetch_indifferent(metadata, "task")
+  end
+
+  defp fetch_indifferent(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp fetch_indifferent(map, key) when is_map(map) and is_binary(key) do
+    Map.get(map, key) ||
+      try do
+        Map.get(map, String.to_existing_atom(key))
+      rescue
+        ArgumentError -> nil
+      end
+  end
+
+  defp fetch_indifferent(_, _), do: nil
+
+  defp attach_commbus_context(opts, packet) do
+    context =
+      %{
+        packet: packet,
+        conversation: Map.get(packet, :conversation),
+        sections: Map.get(packet, :sections, %{}),
+        included_entries: Map.get(packet, :included_entries, []),
+        excluded_entries: Map.get(packet, :excluded_entries, []),
+        token_usage: Map.get(packet, :token_usage, %{}),
+        metadata: Map.get(packet, :metadata, %{})
+      }
+
+    Keyword.update(opts, :commbus_packet, context, &Map.merge(&1, context))
   end
 
   def extract_response_format(%Context{opts: opts} = ctx, _opts) do

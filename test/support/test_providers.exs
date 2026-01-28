@@ -118,3 +118,41 @@ defmodule LlmCore.TestProviders.NoStructured do
     LlmCore.TestProviders.Basic.stream(prompt, opts)
   end
 end
+
+defmodule LlmCore.TestProviders.CommBusCapture do
+  @behaviour LlmCore.LLM.Provider
+
+  alias LlmCore.LLM.Response
+
+  @impl true
+  def available?, do: true
+
+  @impl true
+  def capabilities do
+    %{
+      streaming: false,
+      structured_output: false,
+      tool_use: false,
+      vision: false,
+      models: ["commbus-capture"],
+      max_context: 1_000
+    }
+  end
+
+  @impl true
+  def provider_type, do: :api
+
+  @impl true
+  def send(prompt, opts \\ []) do
+    {:ok,
+     Response.new(
+       content: "ok",
+       provider: :commbus_capture,
+       model: "commbus-capture",
+       metadata: %{prompt: prompt, commbus: Keyword.get(opts, :commbus_packet)}
+     )}
+  end
+
+  @impl true
+  def stream(_prompt, _opts \\ []), do: {:error, :not_supported}
+end

@@ -29,7 +29,24 @@ defmodule LlmCore.Pipelines.RoutingPipelineTest do
   test "returns error when agent is missing" do
     put_routing(%{"default" => "ghost"})
 
-    assert {:error, :provider_not_found} = RoutingPipeline.route("any")
+    assert {:error, {:provider_not_found, %{alias: "ghost", suggestions: suggestions}}} =
+             RoutingPipeline.route("any")
+
+    assert is_list(suggestions)
+  end
+
+  test "enforces capability requirements from routing entry" do
+    register_agent("limited", LlmCore.TestProviders.NoStructured)
+
+    put_routing(%{
+      "default" => %{"alias" => "limited", "capabilities" => %{structured_output: true}}
+    })
+
+    assert {:error, {:capability_mismatch, info}} = RoutingPipeline.route("any")
+    assert info.alias == "limited"
+    assert info.required == %{structured_output: true}
+    assert is_list(info.suggestions)
+    assert Enum.all?(info.suggestions, &is_map/1)
   end
 
   property "resolves generated routing tables" do

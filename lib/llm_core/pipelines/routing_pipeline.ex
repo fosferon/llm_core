@@ -23,7 +23,9 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
   use ALF.DSL
 
   alias ALF.Manager
+  alias LlmCore.Agent
   alias LlmCore.Agent.Registry
+  alias LlmCore.Provider.Registry, as: ProviderRegistry
   alias LlmCore.Telemetry
   alias LlmCore.Config.{Loader, Store}
   alias LlmCore.Pipelines.RoutingPipeline.Context
@@ -34,6 +36,7 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     stage(:load_routing_table),
     stage(:resolve_entry),
     stage(:load_agent),
+    stage(:ensure_capabilities),
     stage(:build_resolved_route),
     stage(:finalize_result)
   ]
@@ -100,14 +103,54 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
 
   def load_agent(%Context{route_entry: %RouteEntry{alias: alias}} = ctx, _opts) do
     case Registry.get(alias) do
-      {:ok, agent} -> %{ctx | agent: agent}
-      {:error, :not_found} -> %{ctx | result: {:error, :provider_not_found}}
+      {:ok, agent} ->
+        %{ctx | agent: agent}
+
+      {:error, :not_found} ->
+        suggestions = ProviderRegistry.suggest_alias(alias)
+
+        %{
+          ctx
+          | result: {:error, {:provider_not_found, %{alias: alias, suggestions: suggestions}}}
+        }
     end
   end
 
   def load_agent(%Context{} = ctx, _opts) do
     %{ctx | result: {:error, :no_matching_route}}
   end
+
+  def ensure_capabilities(%Context{result: {:error, _}} = ctx, _opts), do: ctx
+  def ensure_capabilities(%Context{agent: nil} = ctx, _opts), do: ctx
+
+  def ensure_capabilities(
+        %Context{route_entry: %RouteEntry{capabilities: capabilities}} = ctx,
+        _opts
+      )
+      when capabilities in [%{}, nil],
+      do: ctx
+
+  def ensure_capabilities(
+        %Context{agent: %Agent{} = agent, route_entry: %RouteEntry{capabilities: requirements}} =
+          ctx,
+        _opts
+      ) do
+    if capability_match?(agent.provider, requirements || %{}) do
+      ctx
+    else
+      suggestions = ProviderRegistry.suggest_capable(requirements || %{})
+
+      %{
+        ctx
+        | result:
+            {:error,
+             {:capability_mismatch,
+              %{alias: agent.name, required: requirements, suggestions: suggestions}}}
+      }
+    end
+  end
+
+  def ensure_capabilities(%Context{} = ctx, _opts), do: ctx
 
   def build_resolved_route(%Context{result: {:error, _}} = ctx, _opts), do: ctx
 
@@ -152,6 +195,24 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
   defp ensure_started do
     unless Manager.started?(__MODULE__) do
       :ok = Manager.start(__MODULE__, sync: true)
+    end
+  end
+
+  defp capability_match?(provider_module, requirements) do
+    definition_capabilities =
+      case ProviderRegistry.lookup_by_module(provider_module) do
+        {:ok, definition} -> definition.capabilities || %{}
+        _ -> fetch_module_capabilities(provider_module)
+      end
+
+    ProviderRegistry.capability_match?(definition_capabilities, requirements)
+  end
+
+  defp fetch_module_capabilities(provider_module) do
+    if function_exported?(provider_module, :capabilities, 0) do
+      provider_module.capabilities() || %{}
+    else
+      %{}
     end
   end
 end

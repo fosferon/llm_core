@@ -16,7 +16,7 @@ defmodule LlmCore.Config.Watcher do
   def init(opts) do
     dir = opts |> Keyword.get(:config_dir, LlmCore.Paths.project_config_dir()) |> Path.expand()
     debounce_ms = Keyword.get(opts, :debounce_ms, 100)
-    watch_files = Keyword.get(opts, :files, ["routing.yml"])
+    watch_files = Keyword.get(opts, :files, ["routing.yml", "llm_core.toml"])
 
     File.mkdir_p!(dir)
     {:ok, watcher} = FileSystem.start_link(dirs: [dir])
@@ -76,6 +76,7 @@ defmodule LlmCore.Config.Watcher do
   defp reload_path(path) do
     cond do
       String.ends_with?(path, "routing.yml") -> Loader.reload_routing(path: path)
+      String.ends_with?(path, "llm_core.toml") -> Loader.reload_providers(path: path)
       true -> :ok
     end
   end

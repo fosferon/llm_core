@@ -104,6 +104,7 @@ defmodule LlmCore.Memory.Hindsight do
   def recall(query, opts \\ []) do
     MemoryPipeline.recall(query, opts)
   end
+
   @doc """
   Natural language or structured insight query with caching.
 

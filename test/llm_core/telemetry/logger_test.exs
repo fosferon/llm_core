@@ -6,6 +6,7 @@ defmodule LlmCore.Telemetry.LoggerTest do
   alias LlmCore.Telemetry.Logger
 
   setup do
+    Logger.uninstall()
     on_exit(fn -> Logger.uninstall() end)
     :ok
   end

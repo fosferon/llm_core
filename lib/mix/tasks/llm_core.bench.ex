@@ -1,7 +1,21 @@
+unless Code.ensure_loaded?(CommBus.Protocol.Packet) do
+  defmodule CommBus.Protocol.Packet do
+    @moduledoc false
+
+    defstruct conversation: nil,
+              messages: [],
+              metadata: %{},
+              sections: %{},
+              included_entries: [],
+              excluded_entries: [],
+              token_usage: %{}
+  end
+end
+
 defmodule Mix.Tasks.LlmCore.Bench do
   use Mix.Task
 
-  @shortdoc "Runs a lightweight inference benchmark using the test provider"
+  @shortdoc "Runs ALF routing/inference benchmarks with configurable modes"
 
   alias LlmCore.Agent
   alias LlmCore.Agent.Registry
@@ -9,27 +23,69 @@ defmodule Mix.Tasks.LlmCore.Bench do
   alias LlmCore.Router
   alias LlmCore.Router.RoutingTable
 
-  @iterations 50
-
   @impl true
-  def run(_args) do
+  def run(args) do
     Mix.Task.run("app.start")
     load_test_provider()
     ensure_routing()
 
-    {microseconds, _} =
-      :timer.tc(fn ->
-        Enum.each(1..@iterations, fn _ ->
-          {:ok, _} = Router.send("bench", :default, response_format: {:json_schema, %{}})
-        end)
-      end)
+    {opts, _, _} =
+      OptionParser.parse(args,
+        switches: [iterations: :integer, parallel: :integer, mode: :string],
+        aliases: [i: :iterations, p: :parallel]
+      )
+
+    iterations = opts[:iterations] || 200
+    parallel = opts[:parallel] || System.schedulers_online()
+    mode = opts[:mode] |> normalize_mode()
+
+    {microseconds, _} = :timer.tc(fn -> execute(iterations, parallel, mode) end)
 
     total_ms = microseconds / 1_000
-    avg_ms = total_ms / @iterations
+    avg_ms = total_ms / iterations
+    throughput = iterations / (total_ms / 1_000)
 
     Mix.shell().info(
-      "llm_core bench: #{@iterations} calls in #{Float.round(total_ms, 2)} ms (avg #{Float.round(avg_ms, 2)} ms)"
+      "llm_core bench #{mode}: #{iterations} calls in #{Float.round(total_ms, 2)} ms " <>
+        "(avg #{Float.round(avg_ms, 2)} ms, #{Float.round(throughput, 1)} req/s, parallel=#{parallel})"
     )
+  end
+
+  defp execute(iterations, parallel, mode) do
+    chunks =
+      1..iterations
+      |> Enum.chunk_every(max(div(iterations, parallel), 1))
+
+    chunks
+    |> Enum.map(fn chunk ->
+      Task.async(fn -> Enum.each(chunk, fn _ -> run_iteration(mode) end) end)
+    end)
+    |> Enum.each(&Task.await(&1, :infinity))
+  end
+
+  defp run_iteration(:packet) do
+    packet = %CommBus.Protocol.Packet{
+      messages: [
+        %{role: :system, content: "assistant for coding", metadata: %{}},
+        %{role: :user, content: "bench request", metadata: %{language: "elixir"}}
+      ],
+      metadata: %{task_type: "coding", conversation_id: "bench"}
+    }
+
+    {:ok, _} = Router.send_packet(packet, task: :default)
+  end
+
+  defp run_iteration(:prompt) do
+    {:ok, _} = Router.send("bench", :default, response_format: {:json_schema, %{}})
+  end
+
+  defp normalize_mode(nil), do: :prompt
+
+  defp normalize_mode(value) do
+    case String.downcase(value) do
+      "packet" -> :packet
+      _ -> :prompt
+    end
   end
 
   defp load_test_provider do

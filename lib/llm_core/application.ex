@@ -16,6 +16,7 @@ defmodule LlmCore.Application do
 
     case Supervisor.start_link(children, strategy: :one_for_one, name: LlmCore.Supervisor) do
       {:ok, _pid} = ok ->
+        _ = LlmCore.Config.Loader.reload_providers()
         _ = LlmCore.Config.Loader.reload_routing()
         ok
 

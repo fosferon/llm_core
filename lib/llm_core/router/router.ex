@@ -38,6 +38,10 @@ defmodule LlmCore.Router do
     {:noreply, state, {:continue, :load_routing}}
   end
 
+  def handle_info({:config_reloaded, :providers}, state) do
+    {:noreply, state}
+  end
+
   def handle_info(:sync, state) do
     Process.send_after(self(), :sync, @sync_interval_ms)
     {:noreply, state, {:continue, :load_routing}}
@@ -92,6 +96,25 @@ defmodule LlmCore.Router do
           {:ok, Enumerable.t()} | {:error, term()}
   def stream(prompt, task_type, opts \\ []) do
     InferencePipeline.execute(:stream, prompt, task_type, opts)
+  end
+
+  @doc """
+  Sends a CommBus protocol packet through the router.
+  Pass `:task_type` via opts to override metadata-derived routing.
+  """
+  @spec send_packet(map(), keyword()) :: {:ok, LlmCore.LLM.Response.t()} | {:error, term()}
+  def send_packet(packet, opts \\ []) do
+    {task_type, remaining_opts} = Keyword.pop(opts, :task_type)
+    InferencePipeline.execute(:send, packet, task_type, remaining_opts)
+  end
+
+  @doc """
+  Streams a CommBus protocol packet through the routed provider.
+  """
+  @spec stream_packet(map(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
+  def stream_packet(packet, opts \\ []) do
+    {task_type, remaining_opts} = Keyword.pop(opts, :task_type)
+    InferencePipeline.execute(:stream, packet, task_type, remaining_opts)
   end
 
   def handle_call({:resolve, task_type}, _from, state) do

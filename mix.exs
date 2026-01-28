@@ -25,12 +25,14 @@ defmodule LlmCore.MixProject do
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.9"},
+      {:toml, "~> 0.7"},
       {:file_system, "~> 1.0"},
       {:telemetry, "~> 1.2"},
       {:typed_struct, "~> 0.3"},
       {:alf, "~> 0.12"},
       {:mox, "~> 1.0", only: :test},
-      {:stream_data, "~> 1.0", only: :test}
+      {:stream_data, "~> 1.0", only: :test},
+      {:comm_bus, path: "../comm_bus", only: :test}
     ]
   end
 end

@@ -9,6 +9,8 @@ defmodule LlmCore.Pipelines.InferencePipelineTest do
   alias LlmCore.Router.RoutingTable
   alias StreamData, as: SD
 
+  @commbus_packet_struct CommBus.Protocol.Packet
+
   setup do
     ensure_store()
     ensure_registry()
@@ -57,6 +59,66 @@ defmodule LlmCore.Pipelines.InferencePipelineTest do
 
     assert {:error, :structured_output_not_supported} =
              InferencePipeline.execute(:send, "hi", :any, response_format: {:json_schema, %{}})
+  end
+
+  test "derives task type and prompt from CommBus packets" do
+    default_alias = unique_alias("no-structured")
+    coding_alias = unique_alias("basic")
+
+    register_agent(default_alias, LlmCore.TestProviders.NoStructured)
+    register_agent(coding_alias, LlmCore.TestProviders.Basic)
+
+    put_routing(%{"default" => default_alias, "coding" => coding_alias})
+
+    packet =
+      commbus_packet(%{
+        metadata: %{task_type: "coding"},
+        messages: [
+          %{role: :system, content: "rules", metadata: %{}},
+          %{role: :user, content: "hello", metadata: %{}}
+        ]
+      })
+
+    assert {:ok, response} = InferencePipeline.execute(:send, packet, :fallback, [])
+    assert response.provider == :test_basic
+    assert hd(response.raw.prompt)[:role] == :system
+  end
+
+  test "injects CommBus packet context into provider opts" do
+    capture_alias = unique_alias("commbus")
+    register_agent(capture_alias, LlmCore.TestProviders.CommBusCapture)
+    put_routing(%{"default" => capture_alias})
+
+    packet =
+      commbus_packet(%{
+        metadata: %{task_type: "capture"},
+        sections: %{system: [%{id: "sys-1", content: "guardrails"}]},
+        included_entries: [:sys],
+        token_usage: %{total: 42},
+        messages: [
+          %{role: :system, content: "guard", metadata: %{section: :system}},
+          %{role: :user, content: "ping", metadata: %{}}
+        ]
+      })
+
+    assert {:ok, response} = InferencePipeline.execute(:send, packet, :any, [])
+
+    assert response.metadata[:commbus][:sections][:system] == [
+             %{id: "sys-1", content: "guardrails"}
+           ]
+
+    assert response.metadata[:commbus][:token_usage] == %{total: 42}
+    assert Enum.count(response.metadata[:prompt]) == 2
+  end
+
+  test "returns error when CommBus packet lacks messages" do
+    default_alias = unique_alias("basic-default")
+    register_agent(default_alias, LlmCore.TestProviders.Basic)
+    put_routing(%{"default" => default_alias})
+
+    packet = commbus_packet(%{messages: []})
+
+    assert {:error, :empty_packet_messages} = InferencePipeline.execute(:send, packet, :any, [])
   end
 
   property "enforces capability expectations across scenarios" do
@@ -195,5 +257,22 @@ defmodule LlmCore.Pipelines.InferencePipelineTest do
 
   defp assert_case_result(result, {:error, reason}) do
     assert result == {:error, reason}
+  end
+
+  defp commbus_packet(attrs) do
+    base = %{
+      __struct__: @commbus_packet_struct,
+      conversation: nil,
+      messages: [
+        %{role: :user, content: "hello", metadata: %{}}
+      ],
+      sections: %{},
+      included_entries: [],
+      excluded_entries: [],
+      token_usage: %{},
+      metadata: %{}
+    }
+
+    Map.merge(base, attrs)
   end
 end

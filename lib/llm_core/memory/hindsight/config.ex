@@ -36,6 +36,27 @@ defmodule LlmCore.Memory.Hindsight.Config do
   require Logger
 
   @ets_table :llm_core_hindsight_config
+  @runtime_override_key :runtime_override
+
+  @allowed_override_keys [
+    :url,
+    :api_key_env,
+    :enabled,
+    :default_bank_id,
+    :timeout_health_ms,
+    :timeout_retain_ms,
+    :timeout_recall_ms,
+    :timeout_reflect_ms,
+    :max_retries,
+    :retry_backoff_ms,
+    :circuit_failure_threshold,
+    :circuit_reset_ms,
+    :cache_ttl_ms,
+    :cache_reflect_ttl_ms,
+    :cache_max_entries,
+    :prefetch_on_startup,
+    :retain_raw_llm
+  ]
 
   typedstruct do
     field(:url, String.t())
@@ -118,6 +139,7 @@ defmodule LlmCore.Memory.Hindsight.Config do
       |> merge_config(global)
       |> merge_config(project)
       |> apply_env_overrides()
+      |> apply_runtime_override()
 
     struct(__MODULE__, Map.to_list(merged))
   end
@@ -173,6 +195,33 @@ defmodule LlmCore.Memory.Hindsight.Config do
   def clear_ui_override do
     ensure_ets_table()
     :ets.delete(@ets_table, :ui_override_url)
+    :ok
+  end
+
+  @doc """
+  Applies a runtime override map sourced from the TOML configuration loader.
+  """
+  @spec set_runtime_override(map()) :: :ok
+  def set_runtime_override(map) when is_map(map) do
+    ensure_ets_table()
+
+    overrides =
+      map
+      |> normalize_override_map()
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    :ets.insert(@ets_table, {@runtime_override_key, overrides})
+    :ok
+  end
+
+  @doc """
+  Clears the runtime override map.
+  """
+  @spec clear_runtime_override() :: :ok
+  def clear_runtime_override do
+    ensure_ets_table()
+    :ets.delete(@ets_table, @runtime_override_key)
     :ok
   end
 
@@ -352,4 +401,42 @@ defmodule LlmCore.Memory.Hindsight.Config do
   defp parse_int(v) when is_integer(v), do: v
   defp parse_int(v) when is_binary(v), do: String.to_integer(v)
   defp parse_int(_), do: nil
+
+  defp apply_runtime_override(config) do
+    overrides = get_runtime_override()
+
+    merge_config(config, overrides)
+  end
+
+  defp get_runtime_override do
+    ensure_ets_table()
+
+    case :ets.lookup(@ets_table, @runtime_override_key) do
+      [{@runtime_override_key, overrides}] -> overrides
+      _ -> %{}
+    end
+  end
+
+  defp normalize_override_map(map) do
+    Enum.reduce(map, %{}, fn {key, value}, acc ->
+      atom_key = normalize_override_key(key)
+
+      if atom_key in @allowed_override_keys do
+        Map.put(acc, atom_key, value)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp normalize_override_key(key) when is_atom(key), do: key
+
+  defp normalize_override_key(key) when is_binary(key) do
+    normalized =
+      key
+      |> String.replace("-", "_")
+      |> String.downcase()
+
+    Enum.find(@allowed_override_keys, fn atom -> Atom.to_string(atom) == normalized end) || key
+  end
 end
