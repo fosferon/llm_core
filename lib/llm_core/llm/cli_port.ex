@@ -21,12 +21,16 @@ defmodule LlmCore.LLM.CLIPort do
         {:error, :not_found}
 
       path ->
+        # Use shell wrapper with </dev/null to close stdin immediately.
+        # CLI tools like Claude Code wait for stdin to close when not in a TTY.
+        escaped_args = Enum.map(args, &shell_escape/1)
+        shell_cmd = Enum.join([path | escaped_args], " ") <> " </dev/null"
+
         port =
-          Port.open({:spawn_executable, path}, [
+          Port.open({:spawn, shell_cmd}, [
             :binary,
             :exit_status,
-            :stderr_to_stdout,
-            args: args
+            :stderr_to_stdout
           ])
 
         _ = maybe_set_active(execution_id, port)
@@ -51,13 +55,16 @@ defmodule LlmCore.LLM.CLIPort do
         {:error, :not_found}
 
       path ->
+        # Use shell wrapper with </dev/null to close stdin immediately.
+        escaped_args = Enum.map(args, &shell_escape/1)
+        shell_cmd = Enum.join([path | escaped_args], " ") <> " </dev/null"
+
         port =
-          Port.open({:spawn_executable, path}, [
+          Port.open({:spawn, shell_cmd}, [
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            {:line, 1024},
-            args: args
+            {:line, 1024}
           ])
 
         _ = maybe_set_active(execution_id, port)
@@ -90,13 +97,16 @@ defmodule LlmCore.LLM.CLIPort do
         {:error, :not_found}
 
       path ->
+        # Use shell wrapper with </dev/null to close stdin immediately.
+        escaped_args = Enum.map(args, &shell_escape/1)
+        shell_cmd = Enum.join([path | escaped_args], " ") <> " </dev/null"
+
         port =
-          Port.open({:spawn_executable, path}, [
+          Port.open({:spawn, shell_cmd}, [
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            {:line, 1024},
-            args: args
+            {:line, 1024}
           ])
 
         _ = maybe_set_active(execution_id, port)
@@ -159,5 +169,10 @@ defmodule LlmCore.LLM.CLIPort do
     :ok
   rescue
     _ -> :ok
+  end
+
+  defp shell_escape(arg) when is_binary(arg) do
+    # Wrap in single quotes, escaping any existing single quotes
+    "'" <> String.replace(arg, "'", "'\\''") <> "'"
   end
 end
