@@ -219,10 +219,16 @@ defmodule LlmCore.Pipelines.InferencePipeline do
   defp normalize_prompt(prompt) when is_binary(prompt), do: {:ok, prompt}
 
   defp normalize_prompt(prompt) when is_list(prompt) do
-    if Enum.all?(prompt, &valid_message?/1) do
-      {:ok, prompt}
-    else
-      {:error, :invalid_messages}
+    prompt
+    |> Enum.reduce_while([], fn message, acc ->
+      case normalize_message(message) do
+        {:ok, normalized} -> {:cont, [normalized | acc]}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      :error -> {:error, :invalid_messages}
+      normalized -> {:ok, Enum.reverse(normalized)}
     end
   end
 
@@ -234,11 +240,55 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     end
   end
 
-  defp valid_message?(%{role: role, content: content})
-       when role in [:system, :user, :assistant, :tool] and is_binary(content),
-       do: true
+  defp normalize_message(%{role: role, content: content} = message)
+       when is_binary(content) do
+    with {:ok, normalized_role} <- normalize_message_role(role) do
+      metadata = Map.get(message, :metadata) || Map.get(message, "metadata") || %{}
 
-  defp valid_message?(_), do: false
+      {:ok,
+       %{
+         role: normalized_role,
+         content: content,
+         metadata: metadata
+       }}
+    else
+      :error -> :error
+    end
+  end
+
+  defp normalize_message(%{"role" => role, "content" => content} = message)
+       when is_binary(content) do
+    with {:ok, normalized_role} <- normalize_message_role(role) do
+      metadata = Map.get(message, "metadata") || %{}
+
+      {:ok,
+       %{
+         role: normalized_role,
+         content: content,
+         metadata: metadata
+       }}
+    else
+      :error -> :error
+    end
+  end
+
+  defp normalize_message(_), do: :error
+
+  defp normalize_message_role(role) when role in [:system, :user, :assistant, :tool],
+    do: {:ok, role}
+
+  defp normalize_message_role(role) when is_binary(role) do
+    case role |> String.trim() |> String.downcase() do
+      "system" -> {:ok, :system}
+      "assistant" -> {:ok, :assistant}
+      "tool" -> {:ok, :tool}
+      "function" -> {:ok, :tool}
+      "user" -> {:ok, :user}
+      _ -> :error
+    end
+  end
+
+  defp normalize_message_role(_), do: :error
 
   defp normalize_task_type(task_type) when is_atom(task_type), do: Atom.to_string(task_type)
   defp normalize_task_type(task_type) when is_binary(task_type), do: String.trim(task_type)

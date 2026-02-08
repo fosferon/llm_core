@@ -284,16 +284,21 @@ defmodule LlmCore.Agent.Registry do
 
   @impl true
   def handle_cast(:sync_with_providers, state) do
-    {:noreply, register_from_definitions(state, ProviderRegistry.available())}
+    {:noreply, register_from_definitions(state, provider_definitions())}
   end
 
   ## Private Functions
 
   defp auto_discover_providers(state) do
-    case ProviderRegistry.available() do
+    case provider_definitions() do
       [] -> register_fallback_providers(state)
       providers -> register_from_definitions(state, providers)
     end
+  end
+
+  defp provider_definitions do
+    ProviderRegistry.all()
+    |> Map.values()
   end
 
   defp register_fallback_providers(state) do
@@ -313,6 +318,7 @@ defmodule LlmCore.Agent.Registry do
     Enum.reduce(providers, base_state, fn %Definition{} = definition, acc_state ->
       config =
         definition.agent_config
+        |> merge_provider_options(definition.options)
         |> normalize_agent_config()
         |> maybe_put_model(definition.default_model)
 
@@ -380,6 +386,15 @@ defmodule LlmCore.Agent.Registry do
         other
     end)
   end
+
+  defp merge_provider_options(agent_config, nil), do: agent_config
+  defp merge_provider_options(nil, options), do: options
+
+  defp merge_provider_options(agent_config, options) when is_map(agent_config) and is_map(options) do
+    Map.merge(options, agent_config)
+  end
+
+  defp merge_provider_options(agent_config, _options), do: agent_config
 
   defp maybe_put_model(map, nil), do: map
   defp maybe_put_model(map, model) when is_map(map), do: Map.put_new(map, :model, model)

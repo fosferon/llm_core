@@ -53,10 +53,7 @@ defmodule LlmCore.LLM.Ollama do
 
   @impl true
   def stream(prompt, opts \\ []) do
-    payload =
-      prompt
-      |> build_payload(:stream, opts)
-      |> Map.put("stream", true)
+    payload = build_payload(prompt, :stream, opts)
 
     stream = build_stream(payload, opts)
     {:ok, stream}
@@ -79,7 +76,8 @@ defmodule LlmCore.LLM.Ollama do
       %{
         "model" => model,
         "messages" => messages,
-        "options" => build_generation_options(opts)
+        "options" => build_generation_options(opts),
+        "stream" => mode == :stream
       }
       |> maybe_put_keep_alive(opts)
       |> maybe_put_format(opts)

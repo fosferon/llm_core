@@ -32,7 +32,7 @@ defmodule LlmCore.MixProject do
       {:alf, "~> 0.12"},
       {:mox, "~> 1.0", only: :test},
       {:stream_data, "~> 1.0", only: :test},
-      {:comm_bus, path: "../comm_bus", only: :test}
+      {:comm_bus, path: "../comm_bus"}
     ]
   end
 end
