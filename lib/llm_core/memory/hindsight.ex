@@ -10,7 +10,7 @@ defmodule LlmCore.Memory.Hindsight do
 
   ## Configuration
 
-  Configure in `~/.devman/config.yml`:
+  Configure in `~/.llm_core/config.yml`:
 
   ```yaml
   memory:

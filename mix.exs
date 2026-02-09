@@ -1,13 +1,20 @@
 defmodule LlmCore.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+  @source_url "https://github.com/fosferon/llm_core"
+
   def project do
     [
       app: :llm_core,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      description: description(),
+      package: package(),
+      source_url: @source_url,
+      docs: docs()
     ]
   end
 
@@ -16,6 +23,27 @@ defmodule LlmCore.MixProject do
     [
       mod: {LlmCore.Application, []},
       extra_applications: [:logger, :crypto]
+    ]
+  end
+
+  defp description do
+    "Provider-agnostic LLM orchestration library for Elixir with ALF pipelines, " <>
+      "hot-reload configuration, structured output, and semantic memory."
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{
+        "GitHub" => @source_url
+      }
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "docs/configuration.md", "docs/architecture.md"]
     ]
   end
 
@@ -32,7 +60,7 @@ defmodule LlmCore.MixProject do
       {:alf, "~> 0.12"},
       {:mox, "~> 1.0", only: :test},
       {:stream_data, "~> 1.0", only: :test},
-      {:comm_bus, path: "../comm_bus"}
+      {:comm_bus, git: "https://github.com/fosferon/comm_bus.git"}
     ]
   end
 end

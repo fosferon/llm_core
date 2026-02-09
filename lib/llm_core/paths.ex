@@ -3,7 +3,7 @@ defmodule LlmCore.Paths do
   Cross-project path helpers for llm_core.
 
   The module centralizes how we resolve global and project-specific
-  directories so consuming applications (DevMan, HuMan, or others) can
+  directories so consuming applications can
   override locations through environment variables without patching the
   library.
   """
@@ -14,13 +14,13 @@ defmodule LlmCore.Paths do
   Precedence:
     * `LLM_CORE_HOME`
     * `DEVMAN_HOME` (legacy compatibility)
-    * `~/.devman`
+    * `~/.llm_core`
   """
   @spec global_home() :: String.t()
   def global_home do
     System.get_env("LLM_CORE_HOME") ||
       System.get_env("DEVMAN_HOME") ||
-      Path.expand("~/.devman")
+      Path.expand("~/.llm_core")
   end
 
   @doc """
@@ -45,13 +45,13 @@ defmodule LlmCore.Paths do
   Precedence:
     * `LLM_CORE_PROJECT_CONFIG`
     * `DEVMAN_CONFIG` (legacy compatibility)
-    * `<project_root>/.devman`
+    * `<project_root>/.llm_core`
   """
   @spec project_config_dir() :: String.t()
   def project_config_dir do
     System.get_env("LLM_CORE_PROJECT_CONFIG") ||
       System.get_env("DEVMAN_CONFIG") ||
-      Path.join(project_root(), ".devman")
+      Path.join(project_root(), ".llm_core")
   end
 
   @doc """

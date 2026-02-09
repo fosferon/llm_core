@@ -4,8 +4,8 @@ defmodule LlmCore.Memory.Hindsight.Config do
 
   ## Precedence (highest to lowest)
   1. UI runtime override (ETS, session-only)
-  2. Project config (`config/devman/config.yml`)
-  3. Global config (`~/.devman/config.yml`)
+  2. Project config (`<project>/.llm_core/config.yml`)
+  3. Global config (`~/.llm_core/config.yml`)
   4. Environment variable (`HINDSIGHT_URL`)
   5. Auto-discovered endpoint
 

@@ -25,3 +25,19 @@ llm_core-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 **/.DS_Store
+
+# Internal assets and agent handoff docs
+/_assets/
+/_agents/
+
+# AI assistant config
+**/CLAUDE.md
+
+# Legacy DevMan config
+/.devman/
+
+# Environment files
+.env*
+
+# Claude Code
+/.claude/

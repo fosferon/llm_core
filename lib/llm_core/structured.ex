@@ -2,8 +2,8 @@ defmodule LlmCore.Structured do
   @moduledoc """
   Utilities for extracting structured data from LLM responses.
 
-  For now we focus on lightweight JSON-mode validation so HuMan/DevMan can
-  request schemas without pulling in heavy dependencies like Instructor.
+  For now we focus on lightweight JSON-mode validation so consuming applications
+  can request schemas without pulling in heavy dependencies like Instructor.
   """
 
   alias LlmCore.LLM.Response
