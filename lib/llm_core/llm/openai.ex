@@ -1,6 +1,34 @@
 defmodule LlmCore.LLM.OpenAI do
   @moduledoc """
-  OpenAI API provider implementing the Provider behaviour.
+  OpenAI-compatible API provider implementing the Provider behaviour.
+
+  Works with OpenAI, OpenRouter, Together, Groq, local vLLM — any endpoint
+  that speaks the OpenAI chat completions format.
+
+  ## Configuration
+
+  Defaults to OpenAI. Override per-call via opts or globally via app config:
+
+      # Per-call
+      OpenAI.send(prompt, base_url: "https://openrouter.ai/api/v1",
+                          api_key: System.get_env("OPENROUTER_API_KEY"),
+                          model: "anthropic/claude-sonnet-4-20250514")
+
+      # Global (application config)
+      config :llm_core, :openai_base_url, "https://openrouter.ai/api/v1"
+      config :llm_core, :openai_api_key, System.get_env("OPENROUTER_API_KEY")
+
+  ## Auth Resolution Order
+
+  1. `opts[:api_key]` (per-call)
+  2. `Application.get_env(:llm_core, :openai_api_key)`
+  3. `System.get_env("OPENAI_API_KEY")`
+
+  ## URL Resolution Order
+
+  1. `opts[:base_url]` (per-call)
+  2. `Application.get_env(:llm_core, :openai_base_url)`
+  3. `"https://api.openai.com/v1"` (default)
   """
   @behaviour LlmCore.LLM.Provider
 
@@ -10,11 +38,12 @@ defmodule LlmCore.LLM.OpenAI do
   import Kernel, except: [send: 2]
 
   @default_timeout 60_000
-  @api_url "https://api.openai.com/v1/chat/completions"
+  @default_base_url "https://api.openai.com/v1"
+  @completions_path "/chat/completions"
 
   @impl true
   def available? do
-    System.get_env("OPENAI_API_KEY") != nil
+    api_key() not in [nil, ""]
   end
 
   @impl true
@@ -34,43 +63,54 @@ defmodule LlmCore.LLM.OpenAI do
 
   @impl true
   def send(prompt, opts \\ []) do
-    if not available?() do
-      {:error, Error.new(:authentication, message: "OPENAI_API_KEY not set", provider: :openai)}
+    key = resolve_api_key(opts)
+
+    if key in [nil, ""] do
+      {:error, Error.new(:authentication, message: "No API key set (OPENAI_API_KEY or opts[:api_key])", provider: :openai)}
     else
-      do_send(prompt, opts)
+      do_send(prompt, opts, key)
     end
   end
 
-  defp do_send(prompt, opts) do
+  defp do_send(prompt, opts, key) do
     model = Keyword.get(opts, :model, "gpt-4o")
     messages = Messages.normalize_chat(prompt)
+    url = completions_url(opts)
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    req_body = %{
-      model: model,
-      messages: messages
-    }
+    req_body =
+      %{model: model, messages: messages}
+      |> maybe_put(:max_tokens, opts[:max_tokens])
+      |> maybe_put(:temperature, opts[:temperature])
 
     headers = [
-      {"Authorization", "Bearer #{System.get_env("OPENAI_API_KEY")}"},
+      {"Authorization", "Bearer #{key}"},
       {"Content-Type", "application/json"}
     ]
 
-    case Req.post(@api_url, json: req_body, headers: headers, receive_timeout: @default_timeout) do
-      {:ok, %Req.Response{status: 200, body: body}} ->
+    case Req.post(url, json: req_body, headers: headers, receive_timeout: timeout) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         content = get_in(body, ["choices", Access.at(0), "message", "content"])
+
+        usage = case body["usage"] do
+          %{"prompt_tokens" => p, "completion_tokens" => c} ->
+            %{input_tokens: p, output_tokens: c, total_tokens: p + c}
+          _ -> %{}
+        end
 
         {:ok,
          Response.new(
            content: content,
            provider: :openai,
            model: model,
+           usage: usage,
            raw: body
          )}
 
       {:ok, %Req.Response{status: status, body: body}} ->
         {:error,
          Error.new(:provider_error,
-           message: "OpenAI API error: #{status}",
+           message: "API error #{status}: #{error_message(body)}",
            provider: :openai,
            details: body
          )}
@@ -82,45 +122,76 @@ defmodule LlmCore.LLM.OpenAI do
 
   @impl true
   def stream(prompt, opts \\ []) do
-    if not available?() do
-      {:error, Error.new(:authentication, message: "OPENAI_API_KEY not set", provider: :openai)}
+    key = resolve_api_key(opts)
+
+    if key in [nil, ""] do
+      {:error, Error.new(:authentication, message: "No API key set", provider: :openai)}
     else
-      do_stream(prompt, opts)
+      do_stream(prompt, opts, key)
     end
   end
 
-  defp do_stream(prompt, opts) do
+  defp do_stream(prompt, opts, key) do
     model = Keyword.get(opts, :model, "gpt-4o")
+    url = completions_url(opts)
 
-    req_body = %{
-      model: model,
-      messages: Messages.normalize_chat(prompt),
-      stream: true
-    }
+    req_body =
+      %{model: model, messages: Messages.normalize_chat(prompt), stream: true}
+      |> maybe_put(:max_tokens, opts[:max_tokens])
+      |> maybe_put(:temperature, opts[:temperature])
 
     headers = [
-      {"Authorization", "Bearer #{System.get_env("OPENAI_API_KEY")}"},
+      {"Authorization", "Bearer #{key}"},
       {"Content-Type", "application/json"}
     ]
 
-    # We use Stream.resource to wrap the lifecycle of the async request
     Stream.resource(
-      fn -> start_streaming_request(@api_url, req_body, headers) end,
+      fn -> start_streaming_request(url, req_body, headers) end,
       fn
         {:req_pid, ref} -> receive_chunks(ref)
         :done -> {:halt, :done}
       end,
       fn _ -> :ok end
     )
-    # Wrap in result tuple
     |> then(&{:ok, &1})
   end
+
+  # ---------------------------------------------------------------------------
+  # Resolution helpers
+  # ---------------------------------------------------------------------------
+
+  defp resolve_api_key(opts) do
+    opts[:api_key] || api_key()
+  end
+
+  defp api_key do
+    Application.get_env(:llm_core, :openai_api_key) ||
+      System.get_env("OPENAI_API_KEY")
+  end
+
+  defp completions_url(opts) do
+    base =
+      opts[:base_url] ||
+        Application.get_env(:llm_core, :openai_base_url, @default_base_url)
+
+    String.trim_trailing(base, "/") <> @completions_path
+  end
+
+  defp error_message(%{"error" => %{"message" => msg}}), do: msg
+  defp error_message(body) when is_map(body), do: inspect(body)
+  defp error_message(body), do: to_string(body)
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # ---------------------------------------------------------------------------
+  # Streaming internals
+  # ---------------------------------------------------------------------------
 
   defp start_streaming_request(url, body, headers) do
     ref = make_ref()
     parent = self()
 
-    # Spawn a task to run the request and stream back to parent
     Task.start(fn ->
       Req.post(url,
         json: body,
@@ -152,19 +223,15 @@ defmodule LlmCore.LLM.OpenAI do
             _ -> false
           end)
 
-        # Check if we hit [DONE] inside this batch
         if Enum.any?(chunks, &(&1 == :done)) do
-          # Extract valid content before DONE and halt
           valid_content =
             chunks
             |> Enum.take_while(&(&1 != :done))
             |> Enum.map(fn {:ok, json} -> extract_delta(json) end)
             |> Enum.reject(&is_nil/1)
 
-          # Next state is done to halt
           {valid_content, :done}
         else
-          # Just regular chunks
           content =
             chunks
             |> Enum.map(fn {:ok, json} -> extract_delta(json) end)
@@ -175,8 +242,8 @@ defmodule LlmCore.LLM.OpenAI do
 
       {:stream_done, ^ref} ->
         {:halt, :done}
+
     after
-      # Timeout safety
       @default_timeout -> {:halt, :done}
     end
   end
