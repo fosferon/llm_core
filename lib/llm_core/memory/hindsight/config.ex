@@ -2,6 +2,10 @@ defmodule LlmCore.Memory.Hindsight.Config do
   @moduledoc """
   Hindsight-specific configuration with multi-level precedence.
 
+  ## Hindsight 0.4+
+  Uses REST API. URLs are base URLs (e.g. `http://localhost:8888`),
+  not MCP paths. Operations use `/v1/default/banks/{bank_id}/...`.
+
   ## Precedence (highest to lowest)
   1. UI runtime override (ETS, session-only)
   2. Project config (`<project>/.llm_core/config.yml`)
@@ -14,10 +18,10 @@ defmodule LlmCore.Memory.Hindsight.Config do
   ```yaml
   memory:
     hindsight:
-      url: http://localhost:8888/mcp/
+      url: http://localhost:8888
       api_key_env: HINDSIGHT_API_KEY
       enabled: true
-      default_bank_id: user-123
+      default_bank_id: platform
       timeout_health_ms: 2000
       timeout_retain_ms: 10000
       timeout_recall_ms: 30000

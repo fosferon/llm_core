@@ -1,6 +1,9 @@
 defmodule LlmCore.Memory.Hindsight do
   @moduledoc """
-  Hindsight MCP integration for semantic memory capabilities.
+  Hindsight 0.4+ integration for semantic memory capabilities.
+
+  Uses the Hindsight REST API (not MCP). Server runs at localhost:8888,
+  REST endpoints at `/v1/default/banks/{bank_id}/...`.
 
   Provides:
   - Semantic search (recall) with intelligent caching
@@ -15,24 +18,25 @@ defmodule LlmCore.Memory.Hindsight do
   ```yaml
   memory:
     hindsight:
-      url: http://localhost:8888/mcp/
+      url: http://localhost:8888
       enabled: true
+      default_bank_id: platform
       cache_ttl_ms: 300000
   ```
 
   ## Usage
 
       # Semantic search
-      {:ok, results} = Hindsight.recall("authentication patterns")
+      {:ok, results} = Hindsight.recall("authentication patterns", bank_id: "mobus")
 
       # Insights
-      {:ok, insight} = Hindsight.reflect("What patterns work best?")
+      {:ok, insight} = Hindsight.reflect("What patterns work best?", bank_id: "mobus")
 
       # Store content (async)
-      :ok = Hindsight.retain("New pattern discovered", %{type: :pattern})
+      :ok = Hindsight.retain("New pattern discovered", %{}, bank_id: "mobus")
 
       # Store content (sync, for critical data)
-      {:ok, _} = Hindsight.retain_sync("Critical execution", %{type: :execution})
+      {:ok, _} = Hindsight.retain_sync("Critical execution", %{}, bank_id: "mobus")
   """
 
   require Logger
@@ -40,8 +44,11 @@ defmodule LlmCore.Memory.Hindsight do
   alias LlmCore.Memory.Hindsight.{CircuitBreaker, Config, Retry}
   alias LlmCore.Pipelines.MemoryPipeline
 
+  # ── Default bank for recall/reflect when none specified ──────────────────
+  @default_bank "default"
+
   @doc """
-  Checks if Hindsight MCP is available and enabled.
+  Checks if Hindsight API is available and enabled.
   """
   @spec available?() :: boolean()
   def available? do
@@ -58,7 +65,7 @@ defmodule LlmCore.Memory.Hindsight do
   end
 
   @doc """
-  Returns the effective Hindsight URL.
+  Returns the effective Hindsight base URL.
   """
   @spec url() :: String.t() | nil
   def url do
@@ -69,8 +76,8 @@ defmodule LlmCore.Memory.Hindsight do
   Stores content in Hindsight for semantic indexing (async, buffered).
 
   ## Options
-    * `:target_bank` / `:bank_id` - Explicit memory bank to write to
-    * `:context` - Short descriptor for the memory (defaults to `metadata` value)
+    * `:bank_id` / `:target_bank` - Memory bank to write to
+    * `:context` - Short descriptor for the memory
   """
   @spec retain(String.t(), map(), keyword()) :: :ok
   def retain(content, metadata \\ %{}, opts \\ []) do
@@ -92,13 +99,10 @@ defmodule LlmCore.Memory.Hindsight do
 
   ## Options
   - `:limit` - max results (default 10)
-  - `:project_id` - scope to project (nil for global)
-  - `:type` - filter by content type
-  - `:since` - filter by timestamp
+  - `:bank_id` / `:target_bank` - Memory bank to query (defaults to config)
+  - `:budget` - `"low"` | `"mid"` | `"high"` (impacts recall cost)
+  - `:max_tokens` - maximum tokens for result summarization
   - `:bypass_cache` - force fresh query
-  - `:target_bank` / `:bank_id` - Memory bank to query (defaults to config)
-  - `:budget` - `:low | :mid | :high` (impacts recall cost)
-  - `:max_tokens` - maximum tokens to allocate when summarizing results
   """
   @spec recall(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def recall(query, opts \\ []) do
@@ -106,20 +110,12 @@ defmodule LlmCore.Memory.Hindsight do
   end
 
   @doc """
-  Natural language or structured insight query with caching.
-
-  Pass a binary question for free-form reflections or an atom for structured queries.
+  Natural language reflection/synthesis over a bank's memories.
 
   ## Options
-    * `:context` - Additional context for why reflection is needed
-    * `:budget` - `:low | :mid | :high`
-    * `:target_bank` / `:bank_id` - Memory bank to reflect on
-
-  ## Structured Query Types
-    * `:workflow_effectiveness` - stats for specific workflow
-    * `:common_failures` - frequent failure patterns
-    * `:project_insights` - project-specific learnings
-    * `:cross_project` - patterns across projects
+    * `:bank_id` / `:target_bank` - Memory bank to reflect on
+    * `:budget` - `"low"` | `"mid"` | `"high"`
+    * `:context` - Additional context for the reflection
   """
   @spec reflect(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   @spec reflect(atom(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -135,7 +131,7 @@ defmodule LlmCore.Memory.Hindsight do
   end
 
   @doc """
-  Performs a health check on the Hindsight MCP endpoint.
+  Performs a health check on the Hindsight API.
   """
   @spec health_check() :: {:ok, map()} | {:error, term()}
   def health_check do
@@ -151,30 +147,22 @@ defmodule LlmCore.Memory.Hindsight do
   @doc """
   Lists available Hindsight memory banks.
   """
-  @spec list_banks(keyword()) :: {:ok, [map() | struct()]} | {:error, term()}
+  @spec list_banks(keyword()) :: {:ok, [map()]} | {:error, term()}
   def list_banks(opts \\ []) do
     with {:ok, url} <- require_enabled_url() do
       config = Config.effective_config()
       timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
 
-      body = %{
-        jsonrpc: "2.0",
-        method: "hindsight/list_banks",
-        params: %{},
-        id: generate_request_id()
-      }
-
-      case post_mcp(url, body, timeout) do
-        {:ok, %{"result" => %{"banks" => banks}}} -> {:ok, banks}
-        {:ok, %{"result" => banks}} when is_list(banks) -> {:ok, banks}
-        {:ok, %{"result" => result}} -> {:ok, result}
+      case rest_get(url, "/v1/default/banks", timeout) do
+        {:ok, %{"banks" => banks}} -> {:ok, banks}
+        {:ok, other} -> {:ok, List.wrap(other["banks"] || [])}
         error -> error
       end
     end
   end
 
   @doc """
-  Creates (or fetches) a memory bank profile.
+  Creates or updates a memory bank.
   """
   @spec create_bank(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_bank(bank_id, opts \\ [])
@@ -189,20 +177,12 @@ defmodule LlmCore.Memory.Hindsight do
         config = Config.effective_config()
         timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
 
-        params =
-          %{bank_id: trimmed}
-          |> maybe_put(:name, Keyword.get(opts, :name))
+        body =
+          %{name: Keyword.get(opts, :name, trimmed)}
           |> maybe_put(:mission, Keyword.get(opts, :mission))
 
-        body = %{
-          jsonrpc: "2.0",
-          method: "hindsight/create_bank",
-          params: params,
-          id: generate_request_id()
-        }
-
-        case post_mcp(url, body, timeout) do
-          {:ok, %{"result" => result}} -> {:ok, result}
+        case rest_put(url, "/v1/default/banks/#{trimmed}", body, timeout) do
+          {:ok, result} -> {:ok, result}
           error -> error
         end
       end
@@ -211,64 +191,69 @@ defmodule LlmCore.Memory.Hindsight do
 
   def create_bank(_bank_id, _opts), do: {:error, :invalid_bank_id}
 
-  # RPC helpers shared with the memory pipeline
+  @doc """
+  Deletes a memory bank and all its contents.
+  """
+  @spec delete_bank(String.t(), keyword()) :: :ok | {:error, term()}
+  def delete_bank(bank_id, opts \\ []) do
+    with {:ok, url} <- require_enabled_url() do
+      config = Config.effective_config()
+      timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
+
+      case rest_delete(url, "/v1/default/banks/#{bank_id}", timeout) do
+        {:ok, _} -> :ok
+        {:error, {:http_error, 204, _}} -> :ok
+        error -> error
+      end
+    end
+  end
+
+  @doc """
+  Returns stats for a specific bank.
+  """
+  @spec bank_stats(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def bank_stats(bank_id, opts \\ []) do
+    with {:ok, url} <- require_enabled_url() do
+      config = Config.effective_config()
+      timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
+
+      rest_get(url, "/v1/default/banks/#{bank_id}/stats", timeout)
+    end
+  end
+
+  # ── RPC helpers (called by MemoryPipeline) ───────────────────────────────
 
   @doc false
   def do_retain(url, content, metadata, opts) do
     config = Config.effective_config()
-    enriched = enrich_metadata(metadata, opts)
     bank_id = resolve_bank_id(opts)
+    context = Keyword.get(opts, :context) || metadata[:context] || "general"
 
     body = %{
-      jsonrpc: "2.0",
-      method: "hindsight/retain",
-      params:
-        %{
-          content: content,
-          metadata: enriched,
-          timestamp: DateTime.to_iso8601(DateTime.utc_now()),
-          project_id: get_project_id()
-        }
-        |> maybe_put(:bank_id, bank_id),
-      id: generate_request_id()
+      items: [%{content: content, context: context}],
+      async: false
     }
 
     Retry.with_retry(fn ->
-      post_mcp(url, body, config.timeout_retain_ms)
+      rest_post(url, "/v1/default/banks/#{bank_id}/memories", body, config.timeout_retain_ms)
     end)
   end
 
   @doc false
   def do_recall(url, query, opts) do
     config = Config.effective_config()
-    limit = Keyword.get(opts, :limit, 10)
-    project_id = Keyword.get(opts, :project_id)
-    type = Keyword.get(opts, :type)
-    since = Keyword.get(opts, :since)
+    bank_id = resolve_bank_id(opts)
     max_tokens = Keyword.get(opts, :max_tokens, 4_096)
     budget = normalize_budget(Keyword.get(opts, :budget, :low))
-    bank_id = resolve_bank_id(opts)
 
-    params =
-      %{query: query, limit: limit}
-      |> maybe_put(:project_id, project_id)
-      |> maybe_put(:type, type)
-      |> maybe_put(:since, since)
+    body =
+      %{query: query, budget: budget}
       |> maybe_put(:max_tokens, max_tokens)
-      |> maybe_put(:budget, budget)
-      |> maybe_put(:bank_id, bank_id)
-
-    body = %{
-      jsonrpc: "2.0",
-      method: "hindsight/recall",
-      params: params,
-      id: generate_request_id()
-    }
 
     Retry.with_retry(fn ->
-      case post_mcp(url, body, config.timeout_recall_ms) do
-        {:ok, %{"result" => results}} when is_list(results) -> {:ok, results}
-        {:ok, _} -> {:ok, []}
+      case rest_post(url, "/v1/default/banks/#{bank_id}/memories/recall", body, config.timeout_recall_ms) do
+        {:ok, %{"results" => results}} when is_list(results) -> {:ok, results}
+        {:ok, other} -> {:ok, Map.get(other, "results", [])}
         error -> error
       end
     end)
@@ -277,47 +262,25 @@ defmodule LlmCore.Memory.Hindsight do
   @doc false
   def do_reflect(url, question, opts) do
     config = Config.effective_config()
-    budget = normalize_budget(Keyword.get(opts, :budget, :low))
-    context = Keyword.get(opts, :context)
     bank_id = resolve_bank_id(opts)
+    budget = normalize_budget(Keyword.get(opts, :budget, :low))
 
-    params =
-      %{
-        question: question,
-        project_id: get_project_id()
-      }
-      |> maybe_put(:context, context)
-      |> maybe_put(:budget, budget)
-      |> maybe_put(:bank_id, bank_id)
-
-    body = %{
-      jsonrpc: "2.0",
-      method: "hindsight/reflect",
-      params: params,
-      id: generate_request_id()
-    }
+    body = %{query: question, budget: budget}
 
     Retry.with_retry(fn ->
-      case post_mcp(url, body, config.timeout_reflect_ms) do
-        {:ok, %{"result" => %{"insight" => insight}}} -> {:ok, insight}
-        {:ok, %{"result" => insight}} when is_binary(insight) -> {:ok, insight}
-        {:ok, _} -> {:ok, "No insights available"}
+      case rest_post(url, "/v1/default/banks/#{bank_id}/reflect", body, config.timeout_reflect_ms) do
+        {:ok, %{"text" => text}} -> {:ok, text}
+        {:ok, other} -> {:ok, Map.get(other, "text", "No insights available")}
         error -> error
       end
     end)
   end
 
+  # ── Private ──────────────────────────────────────────────────────────────
+
   defp do_health_check(url) do
     config = Config.effective_config()
-
-    body = %{
-      jsonrpc: "2.0",
-      method: "hindsight/health",
-      params: %{},
-      id: generate_request_id()
-    }
-
-    post_mcp(url, body, config.timeout_health_ms)
+    rest_get(url, "/health", config.timeout_health_ms)
   end
 
   defp require_enabled_url do
@@ -331,73 +294,79 @@ defmodule LlmCore.Memory.Hindsight do
     end
   end
 
-  defp post_mcp(url, body, timeout) do
-    headers = build_headers(url)
+  # ── REST client ──────────────────────────────────────────────────────────
 
-    case Req.post(url, json: body, headers: headers, receive_timeout: timeout) do
-      {:ok, %{status: 200, body: response_body}} ->
-        {:ok, response_body}
+  defp rest_get(base_url, path, timeout) do
+    url = String.trim_trailing(base_url, "/") <> path
 
-      {:ok, %{status: status}} ->
-        {:error, {:http_error, status}}
-
-      {:error, %Req.TransportError{reason: reason}} ->
-        {:error, {:transport_error, reason}}
-
-      {:error, %{reason: :timeout}} ->
-        {:error, {:transport_error, :timeout}}
-
-      {:error, reason} ->
-        {:error, reason}
+    case Req.get(url, headers: build_headers(base_url), receive_timeout: timeout) do
+      {:ok, %{status: 200, body: body}} -> {:ok, body}
+      {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+      {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
+      {:error, reason} -> {:error, reason}
     end
   rescue
-    error ->
-      {:error, {:exception, error}}
+    e -> {:error, {:exception, e}}
+  end
+
+  @doc false
+  def rest_post(base_url, path, body, timeout) do
+    url = String.trim_trailing(base_url, "/") <> path
+
+    case Req.post(url, json: body, headers: build_headers(base_url), receive_timeout: timeout) do
+      {:ok, %{status: 200, body: response}} -> {:ok, response}
+      {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+      {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
+      {:error, %{reason: :timeout}} -> {:error, {:transport_error, :timeout}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e -> {:error, {:exception, e}}
+  end
+
+  defp rest_put(base_url, path, body, timeout) do
+    url = String.trim_trailing(base_url, "/") <> path
+
+    case Req.put(url, json: body, headers: build_headers(base_url), receive_timeout: timeout) do
+      {:ok, %{status: s, body: response}} when s in 200..201 -> {:ok, response}
+      {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+      {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e -> {:error, {:exception, e}}
+  end
+
+  defp rest_delete(base_url, path, timeout) do
+    url = String.trim_trailing(base_url, "/") <> path
+
+    case Req.delete(url, headers: build_headers(base_url), receive_timeout: timeout) do
+      {:ok, %{status: s, body: response}} when s in 200..204 -> {:ok, response}
+      {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+      {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e -> {:error, {:exception, e}}
   end
 
   defp build_headers(url) do
-    headers = [{"Content-Type", "application/json"}]
+    headers = [{"content-type", "application/json"}]
 
     if Config.requires_auth?(url) do
       case Config.get_api_key() do
         nil -> headers
-        key -> [{"Authorization", "Bearer #{key}"} | headers]
+        key -> [{"authorization", "Bearer #{key}"} | headers]
       end
     else
       headers
     end
   end
 
-  @doc false
-  def enrich_metadata(metadata, opts) do
-    metadata
-    |> maybe_put_new(:context, Keyword.get(opts, :context))
-    |> Map.merge(%{
-      host_version: application_version(),
-      project_id: get_project_id(),
-      timestamp: DateTime.to_iso8601(DateTime.utc_now())
-    })
-  end
-
-  defp application_version do
-    cond do
-      version = Application.spec(:dev_man, :vsn) -> to_string(version)
-      version = Application.spec(:hu_man, :vsn) -> to_string(version)
-      version = Application.spec(:llm_core, :vsn) -> to_string(version)
-      true -> "unknown"
-    end
-  rescue
-    _ -> "unknown"
-  end
-
-  defp get_project_id do
-    cwd = File.cwd!()
-    :erlang.phash2(cwd) |> to_string()
-  end
+  # ── Helpers ──────────────────────────────────────────────────────────────
 
   defp build_structured_query(:workflow_effectiveness, opts) do
     workflow = Keyword.get(opts, :workflow, "default")
-
     "What is the effectiveness of the #{workflow} workflow? Include success rate and average duration."
   end
 
@@ -415,38 +384,45 @@ defmodule LlmCore.Memory.Hindsight do
 
   @doc false
   def report_result({:ok, _}), do: CircuitBreaker.report_success()
-
-  @doc false
   def report_result({:error, reason}), do: CircuitBreaker.report_failure(reason)
 
   @doc false
-  def generate_request_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-  end
-
-  @doc false
   def resolve_bank_id(opts) do
-    opts[:target_bank] || opts[:bank_id] || Config.effective_bank_id()
+    opts[:target_bank] || opts[:bank_id] || Config.effective_bank_id() || @default_bank
   end
 
   @doc false
   def normalize_budget(nil), do: "low"
-
-  @doc false
-  def normalize_budget(budget) when is_atom(budget),
-    do: budget |> Atom.to_string() |> String.downcase()
-
-  @doc false
+  def normalize_budget(budget) when is_atom(budget), do: budget |> Atom.to_string() |> String.downcase()
   def normalize_budget(budget) when is_binary(budget), do: String.downcase(budget)
   def normalize_budget(_), do: "low"
 
   @doc false
   def maybe_put(map, _key, nil), do: map
-
   def maybe_put(map, key, value), do: Map.put(map, key, value)
 
   @doc false
   def maybe_put_new(map, _key, nil), do: map
-
   def maybe_put_new(map, key, value), do: Map.put_new(map, key, value)
+
+  @doc false
+  def enrich_metadata(metadata, opts) do
+    metadata
+    |> maybe_put_new(:context, Keyword.get(opts, :context))
+    |> Map.merge(%{
+      host_version: application_version(),
+      timestamp: DateTime.to_iso8601(DateTime.utc_now())
+    })
+  end
+
+  defp application_version do
+    cond do
+      version = Application.spec(:dev_man, :vsn) -> to_string(version)
+      version = Application.spec(:hu_man, :vsn) -> to_string(version)
+      version = Application.spec(:llm_core, :vsn) -> to_string(version)
+      true -> "unknown"
+    end
+  rescue
+    _ -> "unknown"
+  end
 end

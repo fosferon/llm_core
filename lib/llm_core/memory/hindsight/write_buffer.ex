@@ -212,30 +212,30 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     end
   end
 
-  defp send_batch(url, bank_id, items) do
+  defp send_batch(base_url, bank_id, items) do
     config = Config.effective_config()
     timeout = config.timeout_retain_ms
 
-    sanitized_items = Enum.map(items, &Map.drop(&1, [:bank_id]))
+    # Build REST API retain request
+    # bank_id is required in the URL path for Hindsight 0.4+
+    effective_bank = bank_id || config.default_bank_id || "default"
 
-    # Build batch request
-    body = %{
-      jsonrpc: "2.0",
-      method: "hindsight/retain_batch",
-      params:
+    retain_items =
+      Enum.map(items, fn item ->
         %{
-          items: sanitized_items,
-          host_version: host_version()
+          content: item[:content] || item["content"],
+          context: get_in(item, [:metadata, :context]) || get_in(item, ["metadata", "context"]) || "general"
         }
-        |> maybe_put(:bank_id, bank_id),
-      id: generate_request_id()
-    }
+      end)
 
-    headers = build_headers(url)
+    body = %{items: retain_items, async: true}
+
+    url = String.trim_trailing(base_url, "/") <> "/v1/default/banks/#{effective_bank}/memories"
+    headers = build_headers(base_url)
 
     case Req.post(url, json: body, headers: headers, receive_timeout: timeout) do
       {:ok, %{status: 200}} ->
-        Logger.debug("Hindsight batch retained #{length(items)} items")
+        Logger.debug("Hindsight batch retained #{length(items)} items in bank #{effective_bank}")
         :ok
 
       {:ok, %{status: status}} ->
@@ -253,12 +253,12 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   end
 
   defp build_headers(url) do
-    headers = [{"Content-Type", "application/json"}]
+    headers = [{"content-type", "application/json"}]
 
     if Config.requires_auth?(url) do
       case Config.get_api_key() do
         nil -> headers
-        key -> [{"Authorization", "Bearer #{key}"} | headers]
+        key -> [{"authorization", "Bearer #{key}"} | headers]
       end
     else
       headers
@@ -290,8 +290,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
       Logger.warning("Failed to persist Hindsight buffer: #{inspect(error)}")
   end
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
 
   defp restore_buffer do
     path = buffer_file_path()
@@ -316,18 +315,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     _ -> []
   end
 
-  defp generate_request_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-  end
 
-  defp host_version do
-    cond do
-      version = Application.spec(:dev_man, :vsn) -> to_string(version)
-      version = Application.spec(:hu_man, :vsn) -> to_string(version)
-      version = Application.spec(:llm_core, :vsn) -> to_string(version)
-      true -> "unknown"
-    end
-  rescue
-    _ -> "unknown"
-  end
+
+
 end

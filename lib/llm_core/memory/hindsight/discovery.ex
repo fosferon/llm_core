@@ -1,13 +1,16 @@
 defmodule LlmCore.Memory.Hindsight.Discovery do
   @moduledoc """
-  Auto-discovery of Hindsight MCP endpoints.
+  Auto-discovery of Hindsight API endpoints.
 
   Probes default endpoints in order:
-  1. http://localhost:8888/mcp/
-  2. http://127.0.0.1:8888/mcp/
+  1. http://localhost:8888
+  2. http://127.0.0.1:8888
 
-  Uses health check with 2-second timeout for fast discovery.
+  Uses GET /health with 2-second timeout for fast discovery.
   Results are cached in ETS for session lifetime.
+
+  ## Hindsight 0.4+
+  Uses REST API (not MCP). Health at `/health`, operations at `/v1/default/banks/...`.
   """
 
   require Logger
@@ -15,8 +18,8 @@ defmodule LlmCore.Memory.Hindsight.Discovery do
   alias LlmCore.Memory.Hindsight.Config
 
   @default_endpoints [
-    "http://localhost:8888/mcp/",
-    "http://127.0.0.1:8888/mcp/"
+    "http://localhost:8888",
+    "http://127.0.0.1:8888"
   ]
 
   @health_timeout_ms 2_000
@@ -28,7 +31,7 @@ defmodule LlmCore.Memory.Hindsight.Discovery do
   """
   @spec discover() :: String.t() | nil
   def discover do
-    Logger.info("Discovering Hindsight MCP endpoint...")
+    Logger.info("Discovering Hindsight API endpoint...")
 
     result =
       Enum.find(@default_endpoints, fn url ->
@@ -81,20 +84,18 @@ defmodule LlmCore.Memory.Hindsight.Discovery do
   end
 
   @doc """
-  Probes a specific URL for health.
+  Probes a specific URL for health via GET /health.
   """
   @spec probe_health(String.t()) :: {:ok, map()} | {:error, term()}
   def probe_health(url) do
-    body = %{
-      jsonrpc: "2.0",
-      method: "hindsight/health",
-      params: %{},
-      id: generate_request_id()
-    }
+    health_url = String.trim_trailing(url, "/") <> "/health"
 
-    case Req.post(url, json: body, receive_timeout: @health_timeout_ms) do
-      {:ok, %{status: 200, body: response_body}} ->
-        {:ok, response_body}
+    case Req.get(health_url, receive_timeout: @health_timeout_ms) do
+      {:ok, %{status: 200, body: %{"status" => "healthy"} = body}} ->
+        {:ok, body}
+
+      {:ok, %{status: 200, body: body}} when is_map(body) ->
+        {:ok, body}
 
       {:ok, %{status: status}} ->
         {:error, {:http_error, status}}
@@ -108,9 +109,5 @@ defmodule LlmCore.Memory.Hindsight.Discovery do
   rescue
     error ->
       {:error, {:exception, error}}
-  end
-
-  defp generate_request_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 end
