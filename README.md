@@ -77,7 +77,8 @@ default = "claude"
 alias = "ollama"
 ```
 
-See the [Configuration Guide](docs/configuration.md) for full details.
+See the [Configuration Guide](docs/configuration.md) for full details including
+agent registration behaviour, name validation rules, and startup timing.
 
 ## Documentation
 
