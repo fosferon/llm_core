@@ -350,16 +350,15 @@ defmodule LlmCore.Memory.Hindsight do
     e -> {:error, {:exception, e}}
   end
 
-  defp build_headers(url) do
+  defp build_headers(_url) do
     headers = [{"content-type", "application/json"}]
 
-    if Config.requires_auth?(url) do
-      case Config.get_api_key() do
-        nil -> headers
-        key -> [{"authorization", "Bearer #{key}"} | headers]
-      end
-    else
-      headers
+    # Always send auth if key is available — even localhost may require it
+    # (e.g. Atrapos tenant extension on Hindsight)
+    case Config.get_api_key() do
+      nil -> headers
+      "" -> headers
+      key -> [{"authorization", "Bearer #{key}"} | headers]
     end
   end
 
