@@ -134,6 +134,9 @@ defmodule LlmCore.Router.ResolvedRoute do
 
   defstruct [:alias, :mode, :agent]
 
+  @doc """
+  Creates a new `ResolvedRoute` with the given alias, mode, and agent.
+  """
   @spec new(String.t(), :abstracted | :passthrough, any()) :: t()
   def new(alias, mode, agent) do
     %__MODULE__{alias: alias, mode: mode, agent: agent}

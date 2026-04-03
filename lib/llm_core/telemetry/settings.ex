@@ -13,6 +13,7 @@ defmodule LlmCore.Telemetry.Settings do
 
   @persistent_key {:llm_core, :telemetry_settings}
 
+  @doc false
   @spec apply(map()) :: :ok
   def apply(config) when is_map(config) do
     normalized = normalize(config)
@@ -21,6 +22,7 @@ defmodule LlmCore.Telemetry.Settings do
     :ok
   end
 
+  @doc false
   @spec current() :: map()
   def current do
     case :persistent_term.get(@persistent_key, nil) do
@@ -33,6 +35,7 @@ defmodule LlmCore.Telemetry.Settings do
     end
   end
 
+  @doc false
   @spec enabled?(atom()) :: boolean()
   def enabled?(name) do
     settings = current()
@@ -45,6 +48,7 @@ defmodule LlmCore.Telemetry.Settings do
     end
   end
 
+  @doc false
   @spec sample?() :: boolean()
   def sample? do
     %{sample_rate: rate} = current()

@@ -43,7 +43,13 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     stage(:finalize_result)
   ]
 
-  @spec execute(:send | :stream, String.t(), String.t() | atom(), keyword()) ::
+  @doc """
+  Executes the inference pipeline for the given mode (`:send` or `:stream`).
+
+  Normalizes the request, resolves routing, dispatches to the provider, and
+  optionally applies structured output extraction.
+  """
+  @spec execute(:send | :stream, String.t() | [map()] | map(), String.t() | atom() | nil, keyword()) ::
           {:ok, term()} | {:error, term()}
   def execute(mode, prompt, task_type, opts \\ []) when mode in [:send, :stream] do
     ensure_started()
@@ -58,6 +64,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
 
   # --- Stage callbacks ----------------------------------------------------
 
+  @doc false
+  @spec normalize_request(Context.t(), keyword()) :: Context.t()
   def normalize_request(
         %Context{
           prompt: %{__struct__: CommBus.Protocol.Packet} = packet,
@@ -89,6 +97,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     end
   end
 
+  @doc false
+  @spec resolve_route(Context.t(), keyword()) :: Context.t()
   def resolve_route(%Context{result: {:error, _}} = ctx, _opts), do: ctx
 
   def resolve_route(%Context{task_type: task_type, opts: opts} = ctx, _opts) do
@@ -100,6 +110,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     end
   end
 
+  @doc false
+  @spec prepare_provider_opts(Context.t(), keyword()) :: Context.t()
   def prepare_provider_opts(%Context{result: {:error, _}} = ctx, _opts), do: ctx
   def prepare_provider_opts(%Context{agent: nil} = ctx, _opts), do: ctx
 
@@ -121,6 +133,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     %{ctx | provider_opts: provider_opts}
   end
 
+  @doc false
+  @spec ensure_streaming_capable(Context.t(), keyword()) :: Context.t()
   def ensure_streaming_capable(%Context{result: {:error, _}} = ctx, _opts), do: ctx
   def ensure_streaming_capable(%Context{mode: :send} = ctx, _opts), do: ctx
 
@@ -136,6 +150,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
 
   def ensure_streaming_capable(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec ensure_structured_output_capable(Context.t(), keyword()) :: Context.t()
   def ensure_structured_output_capable(%Context{result: {:error, _}} = ctx, _opts), do: ctx
   def ensure_structured_output_capable(%Context{response_format: nil} = ctx, _opts), do: ctx
 
@@ -155,6 +171,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
 
   def ensure_structured_output_capable(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec dispatch_provider(Context.t(), keyword()) :: Context.t()
   def dispatch_provider(%Context{result: {:error, _}} = ctx, _opts), do: ctx
   def dispatch_provider(%Context{agent: nil} = ctx, _opts), do: ctx
 
@@ -190,6 +208,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     %{ctx | result: result}
   end
 
+  @doc false
+  @spec maybe_apply_structured_output(Context.t(), keyword()) :: Context.t()
   def maybe_apply_structured_output(%Context{result: {:ok, _}} = ctx, _opts) do
     result = Structured.process(ctx.result, ctx.response_format)
     %{ctx | result: result}
@@ -197,6 +217,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
 
   def maybe_apply_structured_output(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec finalize_result(Context.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def finalize_result(%Context{result: result}, _opts) when not is_nil(result), do: result
   def finalize_result(_ctx, _opts), do: {:error, :inference_failed}
 
@@ -414,6 +436,8 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     Keyword.update(opts, :commbus_packet, context, &Map.merge(&1, context))
   end
 
+  @doc false
+  @spec extract_response_format(Context.t(), keyword()) :: Context.t()
   def extract_response_format(%Context{opts: opts} = ctx, _opts) do
     {response_format, remaining_opts} = Keyword.pop(opts, :response_format)
     %{ctx | response_format: response_format, opts: remaining_opts}

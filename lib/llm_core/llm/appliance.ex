@@ -15,7 +15,11 @@ defmodule LlmCore.LLM.Appliance do
   @health_path "/health"
   @default_timeout 90_000
 
+  @doc """
+  Checks if the appliance base URL is configured and the health endpoint responds.
+  """
   @impl true
+  @spec available?() :: boolean()
   def available? do
     case base_url([]) do
       nil -> false
@@ -23,7 +27,12 @@ defmodule LlmCore.LLM.Appliance do
     end
   end
 
+  @doc """
+  Returns the appliance capability map. Models and max_context are sourced from
+  application config.
+  """
   @impl true
+  @spec capabilities() :: LlmCore.LLM.Provider.capabilities()
   def capabilities do
     %{
       streaming: true,
@@ -35,10 +44,19 @@ defmodule LlmCore.LLM.Appliance do
     }
   end
 
+  @doc """
+  Returns `:local` — Appliance is a local inference provider.
+  """
   @impl true
+  @spec provider_type() :: :local
   def provider_type, do: :local
 
+  @doc """
+  Sends a prompt to the appliance chat completions endpoint.
+  """
   @impl true
+  @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, LlmCore.LLM.Response.t()} | {:error, LlmCore.LLM.Error.t()}
   def send(prompt, opts \\ []) do
     with {:ok, url} <- fetch_base_url(opts) do
       payload = build_payload(prompt, opts)
@@ -67,7 +85,12 @@ defmodule LlmCore.LLM.Appliance do
     end
   end
 
+  @doc """
+  Streams a response from the appliance chat completions endpoint via SSE.
+  """
   @impl true
+  @spec stream(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, LlmCore.LLM.Error.t()}
   def stream(prompt, opts \\ []) do
     with {:ok, url} <- fetch_base_url(opts) do
       payload =
@@ -92,6 +115,7 @@ defmodule LlmCore.LLM.Appliance do
   @doc """
   Discover configured appliances (future mDNS hook).
   """
+  @spec discover() :: [{String.t() | binary(), URI.t()}]
   def discover do
     Application.get_env(:llm_core, :appliance_endpoints, [])
     |> Enum.map(fn
@@ -104,6 +128,7 @@ defmodule LlmCore.LLM.Appliance do
   @doc """
   Perform a lightweight health check against the appliance.
   """
+  @spec health(String.t() | URI.t()) :: boolean()
   def health(url) when is_binary(url) do
     endpoint = String.trim_trailing(url, "/") <> @health_path
 
@@ -118,6 +143,7 @@ defmodule LlmCore.LLM.Appliance do
   def health(%URI{} = uri), do: health(URI.to_string(uri))
 
   @doc false
+  @spec build_payload(LlmCore.LLM.Provider.prompt(), keyword()) :: map()
   def build_payload(prompt, opts \\ []) do
     %{
       "model" => Keyword.get(opts, :model, default_model()),
@@ -133,6 +159,7 @@ defmodule LlmCore.LLM.Appliance do
   end
 
   @doc false
+  @spec decode_stream_chunk(String.t()) :: {[String.t()], boolean()}
   def decode_stream_chunk(data) do
     data
     |> String.split("\n")

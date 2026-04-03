@@ -8,6 +8,17 @@ defmodule LlmCore.Config.Watcher do
 
   alias LlmCore.Config.Loader
 
+  @doc """
+  Starts the config file watcher GenServer.
+
+  ## Options
+
+    * `:config_dir` - directory to watch (default: project config dir)
+    * `:debounce_ms` - debounce interval in milliseconds (default: 100)
+    * `:files` - list of filenames to watch (default: `["routing.yml", "llm_core.toml"]`)
+    * `:name` - GenServer name (default: `__MODULE__`)
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end

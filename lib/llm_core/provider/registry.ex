@@ -107,6 +107,7 @@ defmodule LlmCore.Provider.Registry do
   end
 
   @doc false
+  @spec capability_match?(map() | nil, map()) :: boolean()
   def capability_match?(capabilities, requirements) when is_map(requirements) do
     Enum.all?(requirements, fn {key, expected} ->
       capability_satisfies?(Map.get(capabilities || %{}, key), expected)

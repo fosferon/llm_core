@@ -13,6 +13,12 @@ defmodule LlmCore.LLM.CLIPort do
           | {:error, :timeout}
           | {:error, term()}
 
+  @doc """
+  Runs a CLI executable with the given args and returns collected output.
+
+  Opens a port with `</dev/null` to close stdin, collects all stdout/stderr
+  data, and returns `{:ok, output, exit_code}` or `{:error, reason}`.
+  """
   @spec run(String.t(), [String.t()], timeout(), String.t() | nil) :: exec_result()
   def run(executable, args, timeout, execution_id \\ nil)
       when is_binary(executable) and is_list(args) and is_integer(timeout) do
@@ -46,6 +52,12 @@ defmodule LlmCore.LLM.CLIPort do
     e -> {:error, e}
   end
 
+  @doc """
+  Starts a CLI executable and returns a lazy stream of output lines.
+
+  The stream yields line-by-line output. The port is automatically closed
+  when the stream is consumed or on timeout.
+  """
   @spec stream(String.t(), [String.t()], timeout(), String.t() | nil) ::
           {:ok, Enumerable.t()} | {:error, term()}
   def stream(executable, args, timeout, execution_id \\ nil)
@@ -90,6 +102,11 @@ defmodule LlmCore.LLM.CLIPort do
     e -> {:error, e}
   end
 
+  @doc """
+  Spawns a CLI executable as an interactive port without waiting for completion.
+
+  Returns `{:ok, port}` for the caller to interact with directly.
+  """
   @spec spawn(String.t(), [String.t()], String.t() | nil) :: {:ok, port()} | {:error, term()}
   def spawn(executable, args, execution_id \\ nil) when is_binary(executable) and is_list(args) do
     case System.find_executable(executable) do

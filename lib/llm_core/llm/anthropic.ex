@@ -12,12 +12,21 @@ defmodule LlmCore.LLM.Anthropic do
   @default_timeout 120_000
   @messages_path "/messages"
 
+  @doc """
+  Checks if the Anthropic API key is configured.
+  """
   @impl true
+  @spec available?() :: boolean()
   def available? do
     api_key() not in [nil, ""]
   end
 
+  @doc """
+  Returns Anthropic's capability map including streaming, structured output,
+  tool use, and supported models.
+  """
   @impl true
+  @spec capabilities() :: LlmCore.LLM.Provider.capabilities()
   def capabilities do
     %{
       streaming: true,
@@ -33,10 +42,19 @@ defmodule LlmCore.LLM.Anthropic do
     }
   end
 
+  @doc """
+  Returns `:api` — Anthropic is a cloud API provider.
+  """
   @impl true
+  @spec provider_type() :: :api
   def provider_type, do: :api
 
+  @doc """
+  Sends a prompt to the Anthropic Messages API and returns the response.
+  """
   @impl true
+  @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, LlmCore.LLM.Response.t()} | {:error, LlmCore.LLM.Error.t()}
   def send(prompt, opts \\ []) do
     with {:ok, api_key} <- fetch_api_key() do
       do_send(prompt, opts, api_key)
@@ -66,7 +84,12 @@ defmodule LlmCore.LLM.Anthropic do
     end
   end
 
+  @doc """
+  Streams a response from the Anthropic Messages API using Server-Sent Events.
+  """
   @impl true
+  @spec stream(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, LlmCore.LLM.Error.t()}
   def stream(prompt, opts \\ []) do
     with {:ok, api_key} <- fetch_api_key() do
       payload =
@@ -98,6 +121,7 @@ defmodule LlmCore.LLM.Anthropic do
   end
 
   @doc false
+  @spec build_payload(LlmCore.LLM.Provider.prompt(), keyword()) :: map()
   def build_payload(prompt, opts \\ []) do
     normalized = Messages.normalize_chat(prompt)
 
@@ -118,6 +142,7 @@ defmodule LlmCore.LLM.Anthropic do
   end
 
   @doc false
+  @spec extract_content(map()) :: String.t() | nil
   def extract_content(%{"content" => content}) when is_list(content) do
     content
     |> Enum.map(&text_from_block/1)
@@ -128,6 +153,7 @@ defmodule LlmCore.LLM.Anthropic do
   def extract_content(_), do: nil
 
   @doc false
+  @spec decode_stream_chunk(String.t()) :: {[String.t()], boolean()}
   def decode_stream_chunk(data) do
     data
     |> String.split("\n")

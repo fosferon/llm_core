@@ -20,7 +20,11 @@ if Code.ensure_loaded?(Instructor.Adapter) do
 
     alias LlmCore.LLM.Response
 
+    @doc """
+    Routes an Instructor completion request through the llm_core router.
+    """
     @impl true
+    @spec chat_completion(keyword(), term()) :: {:ok, term(), String.t()} | {:error, String.t()} | Enumerable.t()
     def chat_completion(params, _config) do
       task_type = Keyword.get(params, :task_type, "default")
       stream? = Keyword.get(params, :stream, false)
@@ -36,10 +40,15 @@ if Code.ensure_loaded?(Instructor.Adapter) do
       end
     end
 
+    @doc """
+    Returns an empty list — llm_core does not generate re-ask messages.
+    """
     @impl true
+    @spec reask_messages(term(), keyword(), term()) :: []
     def reask_messages(_raw_response, _params, _config), do: []
 
     @doc false
+    @spec available?() :: true
     def available?, do: true
 
     defp build_prompt(params) do
@@ -126,12 +135,15 @@ else
     """
 
     @doc false
+    @spec available?() :: false
     def available?, do: false
 
     @doc false
+    @spec chat_completion(keyword(), term()) :: {:error, String.t()}
     def chat_completion(_params, _config), do: {:error, "Instructor dependency not available"}
 
     @doc false
+    @spec reask_messages(term(), keyword(), term()) :: []
     def reask_messages(_raw_response, _params, _config), do: []
   end
 end

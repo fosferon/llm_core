@@ -10,6 +10,10 @@ defmodule LlmCore.Config.Store do
 
   @table :llm_core_config
 
+  @doc """
+  Starts the config store GenServer and creates the backing ETS table.
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -23,6 +27,7 @@ defmodule LlmCore.Config.Store do
   @doc """
   Stores the current routing table.
   """
+  @spec put_routing(LlmCore.Router.RoutingTable.t()) :: :ok
   def put_routing(%LlmCore.Router.RoutingTable{} = table) do
     :ets.insert(@table, {{:config, :routing}, table})
     :ok

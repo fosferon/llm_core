@@ -11,15 +11,22 @@ defmodule LlmCore.Router do
 
   @sync_interval_ms 60_000
 
+  @doc """
+  Starts the Router GenServer linked to the calling process.
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  @impl true
+  @spec init(keyword()) :: {:ok, map(), {:continue, :load_routing}}
   def init(_opts) do
     Process.send_after(self(), :sync, @sync_interval_ms)
     {:ok, %{routing_table: nil, last_sync: nil}, {:continue, :load_routing}}
   end
 
+  @impl true
   def handle_continue(:load_routing, state) do
     table =
       case Store.get_routing() do
@@ -34,6 +41,7 @@ defmodule LlmCore.Router do
     {:noreply, %{state | routing_table: table, last_sync: DateTime.utc_now()}}
   end
 
+  @impl true
   def handle_info({:config_reloaded, :routing}, state) do
     {:noreply, state, {:continue, :load_routing}}
   end
@@ -50,6 +58,7 @@ defmodule LlmCore.Router do
   @doc """
   Resolves a task type (e.g., "coding", "planning") to a full agent config.
   """
+  @spec resolve(String.t() | atom()) :: {:ok, ResolvedRoute.t()} | {:error, term()}
   def resolve(task_type) when is_atom(task_type), do: resolve(Atom.to_string(task_type))
 
   def resolve(task_type) when is_binary(task_type),
@@ -71,6 +80,7 @@ defmodule LlmCore.Router do
   @doc """
   Returns the current routing table (debug/introspection).
   """
+  @spec get_routing_table() :: RoutingTable.t() | nil
   def get_routing_table do
     GenServer.call(__MODULE__, :get_routing_table)
   end
@@ -78,6 +88,7 @@ defmodule LlmCore.Router do
   @doc """
   Forces an immediate sync from the config store.
   """
+  @spec sync() :: :ok
   def sync, do: GenServer.cast(__MODULE__, :sync)
 
   @doc """
@@ -117,6 +128,7 @@ defmodule LlmCore.Router do
     InferencePipeline.execute(:stream, packet, task_type, remaining_opts)
   end
 
+  @impl true
   def handle_call({:resolve, task_type}, _from, state) do
     result = RoutingPipeline.route(task_type, routing_table: state.routing_table)
     {:reply, result, state}
@@ -126,6 +138,7 @@ defmodule LlmCore.Router do
     {:reply, state.routing_table, state}
   end
 
+  @impl true
   def handle_cast(:sync, state) do
     {:noreply, state, {:continue, :load_routing}}
   end
