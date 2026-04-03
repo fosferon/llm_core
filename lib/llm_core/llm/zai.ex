@@ -13,12 +13,20 @@ defmodule LlmCore.LLM.Zai do
   # Hypothetical URL
   @api_url "https://api.z.ai/v1/chat/completions"
 
+  @doc """
+  Checks if the ZAI_API_KEY environment variable is set.
+  """
   @impl true
+  @spec available?() :: boolean()
   def available? do
     System.get_env("ZAI_API_KEY") != nil
   end
 
+  @doc """
+  Returns the Z.ai capability map.
+  """
   @impl true
+  @spec capabilities() :: LlmCore.LLM.Provider.capabilities()
   def capabilities do
     %{
       streaming: true,
@@ -30,10 +38,19 @@ defmodule LlmCore.LLM.Zai do
     }
   end
 
+  @doc """
+  Returns `:api` — Z.ai is a cloud API provider.
+  """
   @impl true
+  @spec provider_type() :: :api
   def provider_type, do: :api
 
+  @doc """
+  Sends a prompt to the Z.ai chat completions endpoint.
+  """
   @impl true
+  @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, LlmCore.LLM.Response.t()} | {:error, LlmCore.LLM.Error.t()}
   def send(prompt, opts \\ []) do
     if not available?() do
       {:error, Error.new(:authentication, message: "ZAI_API_KEY not set", provider: :zai)}
@@ -80,7 +97,12 @@ defmodule LlmCore.LLM.Zai do
     end
   end
 
+  @doc """
+  Streams a response from the Z.ai chat completions endpoint.
+  """
   @impl true
+  @spec stream(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, LlmCore.LLM.Error.t()}
   def stream(prompt, opts \\ []) do
     if not available?() do
       {:error, Error.new(:authentication, message: "ZAI_API_KEY not set", provider: :zai)}

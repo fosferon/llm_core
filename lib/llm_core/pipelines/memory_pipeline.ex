@@ -60,11 +60,15 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   # -- Pipeline stages ------------------------------------------------------
 
+  @doc false
+  @spec load_config(Context.t(), keyword()) :: Context.t()
   def load_config(%Context{} = ctx, _opts) do
     config = Config.effective_config()
     %{ctx | config: config, url: Config.effective_url()}
   end
 
+  @doc false
+  @spec normalize_request(Context.t(), keyword()) :: Context.t()
   def normalize_request(%Context{operation: :retain_async, payload: payload} = ctx, _opts) do
     opts = Map.get(payload, :opts, [])
     metadata = Map.get(payload, :metadata, %{}) || %{}
@@ -96,6 +100,8 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   def normalize_request(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec ensure_availability(Context.t(), keyword()) :: Context.t()
   def ensure_availability(%Context{result: result} = ctx, _opts) when not is_nil(result), do: ctx
 
   def ensure_availability(
@@ -138,6 +144,8 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   def ensure_availability(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec maybe_serve_from_cache(Context.t(), keyword()) :: Context.t()
   def maybe_serve_from_cache(%Context{result: result} = ctx, _opts) when not is_nil(result),
     do: ctx
 
@@ -177,6 +185,8 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   def maybe_serve_from_cache(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec circuit_gate(Context.t(), keyword()) :: Context.t()
   def circuit_gate(%Context{result: result} = ctx, _opts) when not is_nil(result), do: ctx
 
   def circuit_gate(%Context{operation: op} = ctx, _opts)
@@ -190,6 +200,8 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
     end
   end
 
+  @doc false
+  @spec execute_operation(Context.t(), keyword()) :: Context.t()
   def execute_operation(%Context{result: result} = ctx, _opts) when not is_nil(result), do: ctx
 
   def execute_operation(%Context{operation: :retain_async, payload: payload} = ctx, _opts) do
@@ -220,6 +232,8 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   def execute_operation(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec maybe_cache_result(Context.t(), keyword()) :: Context.t()
   def maybe_cache_result(
         %Context{operation: :recall, result: {:ok, value}, cache_key: key, config: config} = ctx,
         _opts
@@ -240,6 +254,8 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   def maybe_cache_result(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec finalize_result(Context.t(), keyword()) :: term()
   def finalize_result(%Context{result: result}, _opts) when not is_nil(result), do: result
   def finalize_result(_ctx, _opts), do: {:error, :hindsight_failed}
 

@@ -13,6 +13,19 @@ unless Code.ensure_loaded?(CommBus.Protocol.Packet) do
 end
 
 defmodule Mix.Tasks.LlmCore.Bench do
+  @moduledoc """
+  Runs ALF routing and inference pipeline benchmarks.
+
+  Registers a lightweight test provider, configures a routing table pointing at
+  it, then fires `iterations` calls through the inference pipeline with
+  configurable parallelism. Reports total time, average latency, and throughput.
+
+  ## Examples
+
+      mix llm_core.bench
+      mix llm_core.bench --iterations 500 --parallel 8
+      mix llm_core.bench --mode packet
+  """
   use Mix.Task
 
   @shortdoc "Runs ALF routing/inference benchmarks with configurable modes"
@@ -24,6 +37,7 @@ defmodule Mix.Tasks.LlmCore.Bench do
   alias LlmCore.Router.RoutingTable
 
   @impl true
+  @spec run([String.t()]) :: :ok
   def run(args) do
     Mix.Task.run("app.start")
     load_test_provider()

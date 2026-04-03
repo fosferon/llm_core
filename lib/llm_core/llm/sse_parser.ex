@@ -9,6 +9,7 @@ defmodule LlmCore.LLM.SSEParser do
 
   Returns `{:ok, data}` if data is found, `:done` if stream end signal, or `:ignore`.
   """
+  @spec parse_line(String.t()) :: {:ok, map()} | :done | :ignore
   def parse_line(line) do
     case line do
       "data: [DONE]" ->
@@ -30,6 +31,7 @@ defmodule LlmCore.LLM.SSEParser do
   Accumulates streamed chunks into a single content string.
   Useful for non-streaming consumers or testing.
   """
+  @spec reduce_chunks(Enumerable.t()) :: String.t()
   def reduce_chunks(enum) do
     Enum.reduce(enum, "", fn chunk, acc -> acc <> chunk end)
   end

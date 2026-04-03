@@ -58,6 +58,8 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
 
   # --- Stage callbacks ----------------------------------------------------
 
+  @doc false
+  @spec normalize_task_type(Context.t(), keyword()) :: Context.t()
   def normalize_task_type(%Context{task_type: task_type} = ctx, _opts) when is_atom(task_type) do
     %{ctx | task_type: Atom.to_string(task_type)}
   end
@@ -71,6 +73,8 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     %{ctx | task_type: "default"}
   end
 
+  @doc false
+  @spec load_routing_table(Context.t(), keyword()) :: Context.t()
   def load_routing_table(%Context{opts: opts} = ctx, _opts) do
     routing_table_opt = Keyword.get(opts, :routing_table)
 
@@ -93,6 +97,8 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     routing_table
   end
 
+  @doc false
+  @spec resolve_entry(Context.t(), keyword()) :: Context.t()
   def resolve_entry(
         %Context{routing_table: %RoutingTable{} = table, task_type: task} = ctx,
         _opts
@@ -101,6 +107,8 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     %{ctx | route_entry: entry}
   end
 
+  @doc false
+  @spec load_agent(Context.t(), keyword()) :: Context.t()
   def load_agent(%Context{route_entry: %RouteEntry{alias: alias}} = ctx, _opts) do
     case Registry.get(alias) do
       {:ok, agent} ->
@@ -120,6 +128,8 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     %{ctx | result: {:error, :no_matching_route}}
   end
 
+  @doc false
+  @spec ensure_capabilities(Context.t(), keyword()) :: Context.t()
   def ensure_capabilities(%Context{result: {:error, _}} = ctx, _opts), do: ctx
   def ensure_capabilities(%Context{agent: nil} = ctx, _opts), do: ctx
 
@@ -152,6 +162,8 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
 
   def ensure_capabilities(%Context{} = ctx, _opts), do: ctx
 
+  @doc false
+  @spec build_resolved_route(Context.t(), keyword()) :: Context.t()
   def build_resolved_route(%Context{result: {:error, _}} = ctx, _opts), do: ctx
 
   def build_resolved_route(%Context{agent: agent, route_entry: entry} = ctx, _opts)
@@ -164,6 +176,8 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     %{ctx | result: {:error, :provider_not_found}}
   end
 
+  @doc false
+  @spec finalize_result(Context.t(), keyword()) :: {:ok, ResolvedRoute.t()} | {:error, term()}
   def finalize_result(%Context{result: result}, _opts) when not is_nil(result), do: result
   def finalize_result(_ctx, _opts), do: {:error, :route_resolution_failed}
 

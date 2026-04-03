@@ -41,12 +41,21 @@ defmodule LlmCore.LLM.OpenAI do
   @default_base_url "https://api.openai.com/v1"
   @completions_path "/chat/completions"
 
+  @doc """
+  Checks if an OpenAI-compatible API key is configured.
+  """
   @impl true
+  @spec available?() :: boolean()
   def available? do
     api_key() not in [nil, ""]
   end
 
+  @doc """
+  Returns the OpenAI capability map including streaming, structured output,
+  tool use, vision, and supported models.
+  """
   @impl true
+  @spec capabilities() :: LlmCore.LLM.Provider.capabilities()
   def capabilities do
     %{
       streaming: true,
@@ -58,10 +67,19 @@ defmodule LlmCore.LLM.OpenAI do
     }
   end
 
+  @doc """
+  Returns `:api` — OpenAI is a cloud API provider.
+  """
   @impl true
+  @spec provider_type() :: :api
   def provider_type, do: :api
 
+  @doc """
+  Sends a prompt to the OpenAI-compatible chat completions endpoint.
+  """
   @impl true
+  @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, LlmCore.LLM.Response.t()} | {:error, LlmCore.LLM.Error.t()}
   def send(prompt, opts \\ []) do
     key = resolve_api_key(opts)
 
@@ -120,7 +138,12 @@ defmodule LlmCore.LLM.OpenAI do
     end
   end
 
+  @doc """
+  Streams a response from the OpenAI-compatible chat completions endpoint.
+  """
   @impl true
+  @spec stream(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, LlmCore.LLM.Error.t()}
   def stream(prompt, opts \\ []) do
     key = resolve_api_key(opts)
 

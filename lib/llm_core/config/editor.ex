@@ -10,6 +10,9 @@ defmodule LlmCore.Config.Editor do
   alias LlmCore.Config.TomlWriter
   alias LlmCore.Paths
 
+  @doc """
+  Returns the default path to the project-level `llm_core.toml` file.
+  """
   @spec default_path() :: String.t()
   def default_path do
     Paths.project_config_dir()
@@ -17,7 +20,13 @@ defmodule LlmCore.Config.Editor do
     |> Path.expand()
   end
 
-  @spec read(String.t() | nil) :: {:ok, map()}
+  @doc """
+  Reads and decodes the TOML configuration file at `path`.
+
+  Returns `{:ok, map()}` with the parsed contents, or `{:ok, %{}}` if the
+  file does not exist.
+  """
+  @spec read(String.t() | nil) :: {:ok, map()} | {:error, term()}
   def read(path \\ default_path()) do
     case File.read(path) do
       {:ok, content} ->
@@ -34,6 +43,10 @@ defmodule LlmCore.Config.Editor do
     end
   end
 
+  @doc """
+  Encodes `map` as TOML and writes it to `path`, creating parent directories
+  as needed.
+  """
   @spec write(map(), String.t() | nil) :: :ok | {:error, term()}
   def write(map, path \\ default_path()) when is_map(map) do
     with {:ok, encoded} <- TomlWriter.encode(map) do
@@ -42,6 +55,12 @@ defmodule LlmCore.Config.Editor do
     end
   end
 
+  @doc """
+  Reads the config at `path`, applies the transformation function `fun`, and
+  writes the result back.
+
+  Returns `{:ok, new_config}` on success.
+  """
   @spec update((map() -> map()), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def update(fun, path \\ default_path()) when is_function(fun, 1) do
     with {:ok, config} <- read(path) do
@@ -51,6 +70,11 @@ defmodule LlmCore.Config.Editor do
     end
   end
 
+  @doc """
+  Sets a nested value in `config` at the given key path.
+
+  Creates intermediate maps as needed.
+  """
   @spec put_path(map(), [String.t()], term()) :: map()
   def put_path(config, [], _value), do: config
 
@@ -69,6 +93,9 @@ defmodule LlmCore.Config.Editor do
     Map.put(config, key, updated)
   end
 
+  @doc """
+  Removes the value at the given key path from `config`.
+  """
   @spec delete_path(map(), [String.t()]) :: map()
   def delete_path(config, []), do: config
 

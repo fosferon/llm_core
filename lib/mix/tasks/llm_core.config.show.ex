@@ -26,6 +26,7 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
   @shortdoc "Shows llm_core configuration"
 
   @impl true
+  @spec run([String.t()]) :: :ok
   def run(args) do
     Mix.Task.run("app.start")
 

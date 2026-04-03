@@ -224,6 +224,7 @@ defmodule LlmCore.Memory.Hindsight do
   # ── RPC helpers (called by MemoryPipeline) ───────────────────────────────
 
   @doc false
+  @spec do_retain(String.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def do_retain(url, content, metadata, opts) do
     config = Config.effective_config()
     bank_id = resolve_bank_id(opts)
@@ -240,6 +241,7 @@ defmodule LlmCore.Memory.Hindsight do
   end
 
   @doc false
+  @spec do_recall(String.t(), String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def do_recall(url, query, opts) do
     config = Config.effective_config()
     bank_id = resolve_bank_id(opts)
@@ -260,6 +262,7 @@ defmodule LlmCore.Memory.Hindsight do
   end
 
   @doc false
+  @spec do_reflect(String.t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def do_reflect(url, question, opts) do
     config = Config.effective_config()
     bank_id = resolve_bank_id(opts)
@@ -310,6 +313,7 @@ defmodule LlmCore.Memory.Hindsight do
   end
 
   @doc false
+  @spec rest_post(String.t(), String.t(), map(), pos_integer()) :: {:ok, map()} | {:error, term()}
   def rest_post(base_url, path, body, timeout) do
     url = String.trim_trailing(base_url, "/") <> path
 
@@ -382,29 +386,35 @@ defmodule LlmCore.Memory.Hindsight do
   end
 
   @doc false
+  @spec report_result({:ok, term()} | {:error, term()}) :: :ok
   def report_result({:ok, _}), do: CircuitBreaker.report_success()
   def report_result({:error, reason}), do: CircuitBreaker.report_failure(reason)
 
   @doc false
+  @spec resolve_bank_id(keyword()) :: String.t()
   def resolve_bank_id(opts) do
     opts[:target_bank] || opts[:bank_id] || Config.effective_bank_id() || @default_bank
   end
 
   @doc false
+  @spec normalize_budget(atom() | String.t() | nil) :: String.t()
   def normalize_budget(nil), do: "low"
   def normalize_budget(budget) when is_atom(budget), do: budget |> Atom.to_string() |> String.downcase()
   def normalize_budget(budget) when is_binary(budget), do: String.downcase(budget)
   def normalize_budget(_), do: "low"
 
   @doc false
+  @spec maybe_put(map(), atom() | String.t(), term()) :: map()
   def maybe_put(map, _key, nil), do: map
   def maybe_put(map, key, value), do: Map.put(map, key, value)
 
   @doc false
+  @spec maybe_put_new(map(), atom() | String.t(), term()) :: map()
   def maybe_put_new(map, _key, nil), do: map
   def maybe_put_new(map, key, value), do: Map.put_new(map, key, value)
 
   @doc false
+  @spec enrich_metadata(map(), keyword()) :: map()
   def enrich_metadata(metadata, opts) do
     metadata
     |> maybe_put_new(:context, Keyword.get(opts, :context))

@@ -33,6 +33,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   @doc """
   Starts the write buffer GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -65,6 +66,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   end
 
   @doc false
+  @spec clear_buffer() :: :ok
   def clear_buffer do
     GenServer.call(__MODULE__, :clear_buffer)
   end

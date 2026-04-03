@@ -15,7 +15,11 @@ defmodule LlmCore.LLM.Ollama do
   @default_model "llama3.1:8b"
   @default_timeout 120_000
 
+  @doc """
+  Checks if the Ollama server is reachable at the configured base URL.
+  """
   @impl true
+  @spec available?() :: boolean()
   def available? do
     base_url = base_url([])
 
@@ -27,7 +31,11 @@ defmodule LlmCore.LLM.Ollama do
     _ -> false
   end
 
+  @doc """
+  Returns the Ollama capability map including streaming and structured output.
+  """
   @impl true
+  @spec capabilities() :: LlmCore.LLM.Provider.capabilities()
   def capabilities do
     %{
       streaming: true,
@@ -39,10 +47,19 @@ defmodule LlmCore.LLM.Ollama do
     }
   end
 
+  @doc """
+  Returns `:local` — Ollama is a local inference provider.
+  """
   @impl true
+  @spec provider_type() :: :local
   def provider_type, do: :local
 
+  @doc """
+  Sends a prompt to the Ollama chat API and returns the response.
+  """
   @impl true
+  @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, LlmCore.LLM.Response.t()} | {:error, LlmCore.LLM.Error.t()}
   def send(prompt, opts \\ []) do
     payload = build_payload(prompt, :send, opts)
 
@@ -51,7 +68,12 @@ defmodule LlmCore.LLM.Ollama do
     end
   end
 
+  @doc """
+  Streams a response from the Ollama chat API.
+  """
   @impl true
+  @spec stream(LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, LlmCore.LLM.Error.t()}
   def stream(prompt, opts \\ []) do
     payload = build_payload(prompt, :stream, opts)
 
@@ -68,6 +90,7 @@ defmodule LlmCore.LLM.Ollama do
   end
 
   @doc false
+  @spec build_payload(LlmCore.LLM.Provider.prompt(), :send | :stream, keyword()) :: map()
   def build_payload(prompt, mode, opts) when mode in [:send, :stream] do
     model = Keyword.get(opts, :model, default_model())
     messages = Messages.normalize_chat(prompt)
@@ -290,6 +313,7 @@ defmodule LlmCore.LLM.Ollama do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   @doc false
+  @spec normalize_messages(LlmCore.LLM.Provider.prompt()) :: [map()]
   def normalize_messages(messages), do: Messages.normalize_chat(messages)
 
   defp base_url(opts) do

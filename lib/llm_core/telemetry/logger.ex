@@ -15,6 +15,14 @@ defmodule LlmCore.Telemetry.Logger do
     [:llm_core, :provider_dispatch, :exception]
   ]
 
+  @doc """
+  Attaches the telemetry handler for llm_core pipeline events.
+
+  ## Options
+
+    * `:events` - list of event names to attach to (defaults to pipeline stop/exception)
+    * `:level` - Logger level for emitted messages (default: `:info`)
+  """
   @spec install(keyword()) :: :ok | {:error, term()}
   def install(opts \\ []) do
     events = Keyword.get(opts, :events, @default_events)
@@ -28,11 +36,16 @@ defmodule LlmCore.Telemetry.Logger do
     )
   end
 
+  @doc """
+  Detaches the telemetry handler.
+  """
   @spec uninstall() :: :ok | {:error, :not_found}
   def uninstall do
     :telemetry.detach(@handler_id)
   end
 
+  @doc false
+  @spec handle_event([atom()], map(), map(), map()) :: :ok
   def handle_event([:llm_core, _name, :start], _measurements, _metadata, _config), do: :ok
 
   def handle_event([:llm_core, name, :stop], measurements, metadata, %{level: level}) do
