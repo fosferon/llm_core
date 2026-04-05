@@ -14,6 +14,7 @@ defmodule LlmCore.LLM.Response do
     * `raw` - The raw response from the provider for debugging/passthrough
     * `metadata` - Additional provider-specific metadata (latency, request_id, etc.)
     * `structured` - Parsed/validated structured output (when requested)
+    * `tool_calls` - List of tool call requests from the LLM, or nil when no tools were invoked
 
   ## Example
 
@@ -32,7 +33,8 @@ defmodule LlmCore.LLM.Response do
           usage: map() | nil,
           raw: map() | nil,
           metadata: map() | nil,
-          structured: any() | nil
+          structured: any() | nil,
+          tool_calls: [LlmCore.Tool.Call.t()] | nil
         }
 
   @enforce_keys []
@@ -43,7 +45,8 @@ defmodule LlmCore.LLM.Response do
     :usage,
     :raw,
     :metadata,
-    :structured
+    :structured,
+    :tool_calls
   ]
 
   @doc """
