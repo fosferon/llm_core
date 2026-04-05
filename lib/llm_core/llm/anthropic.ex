@@ -6,6 +6,7 @@ defmodule LlmCore.LLM.Anthropic do
   @behaviour LlmCore.LLM.Provider
 
   alias LlmCore.LLM.{Response, Error, Messages, SSEParser}
+  alias LlmCore.Tool.Codec
 
   import Kernel, except: [send: 2]
 
@@ -51,6 +52,11 @@ defmodule LlmCore.LLM.Anthropic do
 
   @doc """
   Sends a prompt to the Anthropic Messages API and returns the response.
+
+  When `opts[:tools]` contains a list of `LlmCore.Tool` structs, tool
+  definitions are encoded into the request body. If the model responds
+  with `stop_reason: "tool_use"`, the returned `Response.tool_calls`
+  will contain decoded `LlmCore.Tool.Call` structs.
   """
   @impl true
   @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
@@ -138,6 +144,7 @@ defmodule LlmCore.LLM.Anthropic do
     |> maybe_put("metadata", Keyword.get(opts, :metadata))
     |> maybe_put("stop_sequences", Keyword.get(opts, :stop_sequences))
     |> maybe_put_system(system_messages)
+    |> maybe_put_tools(Keyword.get(opts, :tools))
     |> maybe_put_response_format(Keyword.get(opts, :response_format))
   end
 
@@ -262,6 +269,7 @@ defmodule LlmCore.LLM.Anthropic do
 
   defp build_response(body) do
     content = extract_content(body)
+    stop_reason = body["stop_reason"]
 
     usage =
       %{}
@@ -269,15 +277,23 @@ defmodule LlmCore.LLM.Anthropic do
       |> maybe_put(:completion_tokens, get_in(body, ["usage", "output_tokens"]))
       |> maybe_put(:total_tokens, total_tokens(body))
 
+    tool_calls =
+      if stop_reason == "tool_use" do
+        Codec.decode_tool_calls(body, :anthropic)
+      else
+        nil
+      end
+
     Response.new(
       content: content,
       provider: :anthropic,
       model: body["model"],
       usage: usage,
+      tool_calls: tool_calls,
       raw: body,
       metadata: %{
         id: body["id"],
-        stop_reason: body["stop_reason"]
+        stop_reason: stop_reason
       }
     )
   end
@@ -322,6 +338,22 @@ defmodule LlmCore.LLM.Anthropic do
     |> Enum.map(&normalize_message/1)
   end
 
+  defp normalize_message(%{"role" => "tool", "content" => content} = msg) do
+    # Anthropic expects tool results as user messages with tool_result content blocks
+    tool_call_id = msg["tool_call_id"]
+
+    %{
+      "role" => "user",
+      "content" => [
+        %{
+          "type" => "tool_result",
+          "tool_use_id" => tool_call_id,
+          "content" => content
+        }
+      ]
+    }
+  end
+
   defp normalize_message(%{"role" => role, "content" => content}) do
     %{
       "role" => normalize_role(role),
@@ -353,6 +385,14 @@ defmodule LlmCore.LLM.Anthropic do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  @spec maybe_put_tools(map(), [LlmCore.Tool.t()] | nil) :: map()
+  defp maybe_put_tools(payload, nil), do: payload
+  defp maybe_put_tools(payload, []), do: payload
+
+  defp maybe_put_tools(payload, tools) when is_list(tools) do
+    Map.put(payload, "tools", Codec.encode_definitions(tools, :anthropic))
+  end
 
   defp maybe_put_system(payload, []), do: payload
 

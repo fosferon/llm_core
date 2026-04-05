@@ -33,6 +33,7 @@ defmodule LlmCore.LLM.OpenAI do
   @behaviour LlmCore.LLM.Provider
 
   alias LlmCore.LLM.{Response, Error, Messages}
+  alias LlmCore.Tool.Codec
   require Logger
 
   import Kernel, except: [send: 2]
@@ -76,6 +77,11 @@ defmodule LlmCore.LLM.OpenAI do
 
   @doc """
   Sends a prompt to the OpenAI-compatible chat completions endpoint.
+
+  When `opts[:tools]` contains a list of `LlmCore.Tool` structs, tool
+  definitions are encoded into the request body. If the model responds
+  with `finish_reason: "tool_calls"`, the returned `Response.tool_calls`
+  will contain decoded `LlmCore.Tool.Call` structs.
   """
   @impl true
   @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
@@ -100,6 +106,7 @@ defmodule LlmCore.LLM.OpenAI do
       %{model: model, messages: messages}
       |> maybe_put(:max_tokens, opts[:max_tokens])
       |> maybe_put(:temperature, opts[:temperature])
+      |> maybe_put_tools(opts[:tools])
 
     headers = [
       {"Authorization", "Bearer #{key}"},
@@ -108,22 +115,7 @@ defmodule LlmCore.LLM.OpenAI do
 
     case Req.post(url, json: req_body, headers: headers, receive_timeout: timeout) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
-        content = get_in(body, ["choices", Access.at(0), "message", "content"])
-
-        usage = case body["usage"] do
-          %{"prompt_tokens" => p, "completion_tokens" => c} ->
-            %{input_tokens: p, output_tokens: c, total_tokens: p + c}
-          _ -> %{}
-        end
-
-        {:ok,
-         Response.new(
-           content: content,
-           provider: :openai,
-           model: model,
-           usage: usage,
-           raw: body
-         )}
+        build_ok_response(body, model)
 
       {:ok, %Req.Response{status: status, body: body}} ->
         {:error,
@@ -136,6 +128,39 @@ defmodule LlmCore.LLM.OpenAI do
       {:error, exception} ->
         {:error, Error.new(:connection, message: Exception.message(exception), provider: :openai)}
     end
+  end
+
+  @spec build_ok_response(map(), String.t()) :: {:ok, Response.t()}
+  defp build_ok_response(body, model) do
+    content = get_in(body, ["choices", Access.at(0), "message", "content"])
+    finish_reason = get_in(body, ["choices", Access.at(0), "finish_reason"])
+
+    usage =
+      case body["usage"] do
+        %{"prompt_tokens" => p, "completion_tokens" => c} ->
+          %{input_tokens: p, output_tokens: c, total_tokens: p + c}
+
+        _ ->
+          %{}
+      end
+
+    tool_calls =
+      if finish_reason == "tool_calls" do
+        Codec.decode_tool_calls(body, :openai)
+      else
+        nil
+      end
+
+    {:ok,
+     Response.new(
+       content: content,
+       provider: :openai,
+       model: model,
+       usage: usage,
+       tool_calls: tool_calls,
+       raw: body,
+       metadata: %{finish_reason: finish_reason}
+     )}
   end
 
   @doc """
@@ -206,6 +231,14 @@ defmodule LlmCore.LLM.OpenAI do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  @spec maybe_put_tools(map(), [LlmCore.Tool.t()] | nil) :: map()
+  defp maybe_put_tools(body, nil), do: body
+  defp maybe_put_tools(body, []), do: body
+
+  defp maybe_put_tools(body, tools) when is_list(tools) do
+    Map.put(body, :tools, Codec.encode_definitions(tools, :openai))
+  end
 
   # ---------------------------------------------------------------------------
   # Streaming internals

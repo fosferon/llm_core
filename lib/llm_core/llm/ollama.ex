@@ -9,6 +9,7 @@ defmodule LlmCore.LLM.Ollama do
   @behaviour LlmCore.LLM.Provider
 
   alias LlmCore.LLM.{Error, Response, Messages}
+  alias LlmCore.Tool.Codec
   import Kernel, except: [send: 2]
 
   @default_base_url "http://localhost:11434"
@@ -32,7 +33,8 @@ defmodule LlmCore.LLM.Ollama do
   end
 
   @doc """
-  Returns the Ollama capability map including streaming and structured output.
+  Returns the Ollama capability map including streaming, structured output,
+  and tool use support.
   """
   @impl true
   @spec capabilities() :: LlmCore.LLM.Provider.capabilities()
@@ -40,7 +42,7 @@ defmodule LlmCore.LLM.Ollama do
     %{
       streaming: true,
       structured_output: true,
-      tool_use: false,
+      tool_use: true,
       vision: false,
       models: [],
       max_context: nil
@@ -56,6 +58,11 @@ defmodule LlmCore.LLM.Ollama do
 
   @doc """
   Sends a prompt to the Ollama chat API and returns the response.
+
+  When `opts[:tools]` contains a list of `LlmCore.Tool` structs, tool
+  definitions are encoded into the request body (OpenAI-compatible format).
+  If the model responds with tool calls, the returned `Response.tool_calls`
+  will contain decoded `LlmCore.Tool.Call` structs.
   """
   @impl true
   @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
@@ -104,6 +111,7 @@ defmodule LlmCore.LLM.Ollama do
       }
       |> maybe_put_keep_alive(opts)
       |> maybe_put_format(opts)
+      |> maybe_put_tools(Keyword.get(opts, :tools))
 
     case Keyword.get(opts, :response_format) do
       nil -> payload
@@ -295,11 +303,19 @@ defmodule LlmCore.LLM.Ollama do
       |> maybe_put("prompt_tokens", body["prompt_eval_count"])
       |> maybe_put("completion_tokens", body["eval_count"])
 
+    tool_calls =
+      case get_in(body, ["message", "tool_calls"]) do
+        nil -> nil
+        [] -> nil
+        _calls -> Codec.decode_tool_calls(body, :ollama)
+      end
+
     Response.new(
       content: content,
       provider: :ollama,
       model: body["model"],
       usage: usage,
+      tool_calls: tool_calls,
       raw: body,
       metadata: %{
         done: body["done"],
@@ -311,6 +327,14 @@ defmodule LlmCore.LLM.Ollama do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  @spec maybe_put_tools(map(), [LlmCore.Tool.t()] | nil) :: map()
+  defp maybe_put_tools(payload, nil), do: payload
+  defp maybe_put_tools(payload, []), do: payload
+
+  defp maybe_put_tools(payload, tools) when is_list(tools) do
+    Map.put(payload, "tools", Codec.encode_definitions(tools, :ollama))
+  end
 
   @doc false
   @spec normalize_messages(LlmCore.LLM.Provider.prompt()) :: [map()]
