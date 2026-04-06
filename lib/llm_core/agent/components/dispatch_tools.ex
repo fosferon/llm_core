@@ -7,6 +7,11 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   error results (not pipeline errors) — the LLM sees the error message and
   can self-correct.
 
+  When a `resolver_module` is set on the context and it implements
+  `dispatch_recipe/1`, the stage checks for dispatch recipes before
+  executing each tool call. If a recipe is found, the call is delegated
+  to the `ToolDispatch` pipeline for orchestrated sub-tool execution.
+
   Emits telemetry events for each tool call:
 
     * `[:llm_core, :agent, :tool_call, :start]`
@@ -17,11 +22,17 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   """
 
   alias LlmCore.Agent.Context
+  alias LlmCore.Agent.Pipeline.ToolDispatch, as: ToolDispatchPipeline
+  alias LlmCore.Agent.ToolDispatch.Event, as: DispatchEvent
   alias LlmCore.Tool.Call
   alias LlmCore.Tool.Result
 
   @doc """
   Dispatches each tool call through the resolver and collects results.
+
+  When a resolver module with `dispatch_recipe/1` is available, checks for
+  recipes before direct execution. Recipe-matched calls are delegated to
+  the `ToolDispatch` pipeline for orchestrated sub-tool execution.
 
   ## Parameters
 
@@ -50,7 +61,18 @@ defmodule LlmCore.Agent.Components.DispatchTools do
           %{tool_name: call.name, call_id: call.id}
         )
 
-        {elapsed_us, result} = :timer.tc(fn -> execute_one(call, resolve_fn) end)
+        {elapsed_us, result} =
+          :timer.tc(fn ->
+            case lookup_recipe(call.name, ctx) do
+              nil ->
+                # No recipe — direct execution (existing behavior, unchanged)
+                execute_one(call, resolve_fn)
+
+              recipe ->
+                # Recipe found — delegate to ToolDispatch pipeline
+                dispatch_via_pipeline(call, resolve_fn, recipe)
+            end
+          end)
 
         :telemetry.execute(
           [:llm_core, :agent, :tool_call, :stop],
@@ -69,6 +91,60 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   end
 
   # -- Private ----------------------------------------------------------------
+
+  @spec lookup_recipe(String.t(), Context.t()) :: (map() -> map()) | nil
+  defp lookup_recipe(_tool_name, %Context{resolver_module: nil}), do: nil
+
+  defp lookup_recipe(tool_name, %Context{resolver_module: mod}) do
+    if function_exported?(mod, :dispatch_recipe, 1) do
+      mod.dispatch_recipe(tool_name)
+    else
+      nil
+    end
+  end
+
+  @spec dispatch_via_pipeline(Call.t(), function(), function()) :: Result.t()
+  defp dispatch_via_pipeline(%Call{} = call, resolve_fn, recipe) do
+    dispatch_event = %DispatchEvent{
+      call: call,
+      resolve_fn: resolve_fn,
+      recipe: recipe
+    }
+
+    :ok = ToolDispatchPipeline.ensure_started(sync: true)
+
+    case ToolDispatchPipeline.call(dispatch_event) do
+      %DispatchEvent{result: content, status: :ok} ->
+        %Result{tool_call_id: call.id, name: call.name, content: content}
+
+      %DispatchEvent{result: content} when is_binary(content) ->
+        %Result{tool_call_id: call.id, name: call.name, content: content}
+
+      %DispatchEvent{} ->
+        %Result{tool_call_id: call.id, name: call.name, content: "Dispatch error: no result"}
+
+      %ALF.ErrorIP{error: error} ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: "Dispatch pipeline error: #{inspect(error)}"
+        }
+
+      other ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: "Dispatch error: #{inspect(other)}"
+        }
+    end
+  rescue
+    e ->
+      %Result{
+        tool_call_id: call.id,
+        name: call.name,
+        content: "Dispatch error: #{Exception.message(e)}"
+      }
+  end
 
   @spec execute_one(Call.t(), (Call.t() -> {:ok, String.t()} | {:error, String.t()})) ::
           Result.t()
