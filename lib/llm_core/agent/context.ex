@@ -16,6 +16,9 @@ defmodule LlmCore.Agent.Context do
     * `tools` — Available tool definitions (`[LlmCore.Tool.t()]`)
     * `response` — The LLM response for this iteration
     * `resolve_tool` — `fn(%Call{}) -> {:ok, String.t()} | {:error, String.t()}`
+    * `resolver_module` — Optional module implementing `ToolResolver` behaviour.
+      When set, `DispatchTools` checks for dispatch recipes via
+      `resolver_module.dispatch_recipe/1`.
     * `iteration` — Current iteration count (0-based)
     * `max_iterations` — Hard iteration limit
 
@@ -51,6 +54,7 @@ defmodule LlmCore.Agent.Context do
           tools: [Tool.t()],
           response: Response.t() | nil,
           resolve_tool: (Call.t() -> {:ok, String.t()} | {:error, String.t()}) | nil,
+          resolver_module: module() | nil,
           iteration: non_neg_integer(),
           max_iterations: pos_integer(),
           tool_calls: [Call.t()],
@@ -67,6 +71,7 @@ defmodule LlmCore.Agent.Context do
     # Input — set by outer loop before pipeline entry
     :response,
     :resolve_tool,
+    :resolver_module,
     messages: [],
     tools: [],
     iteration: 0,

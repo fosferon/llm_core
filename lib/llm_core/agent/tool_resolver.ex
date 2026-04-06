@@ -57,4 +57,39 @@ defmodule LlmCore.Agent.ToolResolver do
   Returns the list of tools available through this resolver.
   """
   @callback available_tools() :: [Tool.t()]
+
+  @doc """
+  Returns a dispatch recipe for the given tool name, or `nil`.
+
+  When a recipe is returned, `DispatchTools` delegates to the
+  `ToolDispatch` pipeline for orchestrated sub-tool execution instead
+  of calling `resolve/1` directly.
+
+  A recipe is a function that takes the tool call's arguments (a map)
+  and returns an execution plan:
+
+      %{
+        serial: [%{tool: "name", arguments: %{...}, label: "Step label"}],
+        parallel: [%{tool: "name", arguments: %{...}, label: "Step label"}],
+        compose: &custom_compose_fn/1  # optional
+      }
+
+  ## Parameters
+
+    * `tool_name` — The tool name to look up a recipe for
+
+  ## Returns
+
+    * A recipe function `(map() -> map())`, or
+    * `nil` if the tool should be executed directly
+
+  ## Example
+
+      @impl true
+      def dispatch_recipe("research_domain"), do: &MyRecipes.research_domain/1
+      def dispatch_recipe(_), do: nil
+  """
+  @callback dispatch_recipe(String.t()) :: (map() -> map()) | nil
+
+  @optional_callbacks [dispatch_recipe: 1]
 end
