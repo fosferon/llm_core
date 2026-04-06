@@ -41,8 +41,8 @@ defmodule LlmCore.Agent.Loop do
 
   @type opts :: [
           {:tools, [LlmCore.Tool.t()]}
-          | {:resolve_tool,
-             (LlmCore.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
+          | {:resolve_tool, (LlmCore.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
+          | {:resolver_module, module() | nil}
           | {:max_iterations, pos_integer()}
           | {:on_iteration, (Context.t() -> :ok) | nil}
           | {:pipeline_opts, keyword()}
@@ -67,6 +67,9 @@ defmodule LlmCore.Agent.Loop do
     * `opts` — Configuration keyword list:
       * `:tools` — (required) list of `LlmCore.Tool.t()` definitions
       * `:resolve_tool` — (required) `fn(Call.t()) -> {:ok, string} | {:error, string}`
+      * `:resolver_module` — optional module implementing `ToolResolver` behaviour.
+        When set, `DispatchTools` checks for dispatch recipes via
+        `resolver_module.dispatch_recipe/1`.
       * `:max_iterations` — iteration ceiling (default: #{@default_max_iterations})
       * `:on_iteration` — optional callback invoked with the pipeline context
         after each iteration
@@ -88,9 +91,10 @@ defmodule LlmCore.Agent.Loop do
   def run(messages, llm_send_fn, opts) do
     tools = Keyword.fetch!(opts, :tools)
     resolve_tool = Keyword.fetch!(opts, :resolve_tool)
+    resolver_module = Keyword.get(opts, :resolver_module)
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     on_iteration = Keyword.get(opts, :on_iteration)
-    pipeline_opts = Keyword.get(opts, :pipeline_opts, [sync: true])
+    pipeline_opts = Keyword.get(opts, :pipeline_opts, sync: true)
     llm_opts = [tools: tools] ++ Keyword.get(opts, :llm_opts, [])
 
     :ok = IterationPipeline.ensure_started(pipeline_opts)
@@ -99,6 +103,7 @@ defmodule LlmCore.Agent.Loop do
       messages: messages,
       tools: tools,
       resolve_tool: resolve_tool,
+      resolver_module: resolver_module,
       max_iterations: max_iterations,
       on_iteration: on_iteration,
       total_tool_calls: 0
@@ -161,6 +166,7 @@ defmodule LlmCore.Agent.Loop do
       messages: state.messages,
       tools: state.tools,
       resolve_tool: state.resolve_tool,
+      resolver_module: state.resolver_module,
       iteration: iteration,
       max_iterations: state.max_iterations
     }
