@@ -111,17 +111,29 @@ defmodule LlmCore.Agent.Components.DispatchTools do
       recipe: recipe
     }
 
-    :ok = ToolDispatchPipeline.ensure_started(sync: true)
+    :ok = ensure_pipeline_sync()
 
     case ToolDispatchPipeline.call(dispatch_event) do
-      %DispatchEvent{result: content, status: :ok} ->
+      %DispatchEvent{result: content, status: :ok} when is_binary(content) and content != "" ->
         %Result{tool_call_id: call.id, name: call.name, content: content}
 
-      %DispatchEvent{result: content} when is_binary(content) ->
+      %DispatchEvent{result: content} when is_binary(content) and content != "" ->
         %Result{tool_call_id: call.id, name: call.name, content: content}
+
+      %DispatchEvent{status: :ok, result: nil} ->
+        # Pipeline completed but compose produced nil — fall back to direct
+        fallback_to_direct(call, resolve_fn)
+
+      %DispatchEvent{status: :error, error: error} ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: "Dispatch error: #{inspect(error)}"
+        }
 
       %DispatchEvent{} ->
-        %Result{tool_call_id: call.id, name: call.name, content: "Dispatch error: no result"}
+        # Pipeline returned empty result — fall back to direct resolution
+        fallback_to_direct(call, resolve_fn)
 
       %ALF.ErrorIP{error: error} ->
         %Result{
@@ -129,6 +141,10 @@ defmodule LlmCore.Agent.Components.DispatchTools do
           name: call.name,
           content: "Dispatch pipeline error: #{inspect(error)}"
         }
+
+      nil ->
+        # Pipeline returned nil (no events reached the end) — fall back to direct
+        fallback_to_direct(call, resolve_fn)
 
       other ->
         %Result{
@@ -138,12 +154,40 @@ defmodule LlmCore.Agent.Components.DispatchTools do
         }
     end
   rescue
-    e ->
-      %Result{
-        tool_call_id: call.id,
-        name: call.name,
-        content: "Dispatch error: #{Exception.message(e)}"
-      }
+    _e ->
+      # Pipeline crashed — fall back to direct resolution
+      fallback_to_direct(call, resolve_fn)
+  end
+
+  @spec ensure_pipeline_sync() :: :ok
+  defp ensure_pipeline_sync do
+    case Process.whereis(ToolDispatchPipeline) do
+      nil ->
+        :ok = ToolDispatchPipeline.ensure_started(sync: true)
+
+      _pid ->
+        # Verify pipeline is in sync mode by checking for absence of Producer
+        producer_name = :"#{ToolDispatchPipeline}.Producer"
+
+        if Process.whereis(producer_name) do
+          # Pipeline is in async mode — stop and restart in sync
+          try do
+            ToolDispatchPipeline.stop()
+          catch
+            _, _ -> :ok
+          end
+
+          Process.sleep(10)
+          :ok = ToolDispatchPipeline.ensure_started(sync: true)
+        else
+          :ok
+        end
+    end
+  end
+
+  @spec fallback_to_direct(Call.t(), function()) :: Result.t()
+  defp fallback_to_direct(%Call{} = call, resolve_fn) do
+    execute_one(call, resolve_fn)
   end
 
   @spec execute_one(Call.t(), (Call.t() -> {:ok, String.t()} | {:error, String.t()})) ::

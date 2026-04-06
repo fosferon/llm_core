@@ -41,19 +41,49 @@ defmodule LlmCore.Agent.ToolDispatch.Components.CollectResults do
   end
 
   # Collect fanned-out results
+  def call(%Event{step_result: nil, total_parallel: total} = event, memo, _opts)
+      when total > 0 do
+    # step_result is nil — a stage error or skip occurred. Record as error.
+    error_result = %{
+      label: (event.current_step && event.current_step[:label]) || "unknown",
+      tool: (event.current_step && event.current_step[:tool]) || "unknown",
+      error: "Step produced no result"
+    }
+
+    collected = memo ++ [error_result]
+
+    if length(collected) >= total do
+      {successes, errors} =
+        Enum.split_with(collected, fn r -> is_map(r) and not Map.has_key?(r, :error) end)
+
+      composed_event = %{
+        event
+        | parallel_results: successes,
+          errors: event.errors ++ errors,
+          current_step: nil,
+          step_result: nil
+      }
+
+      {[composed_event], []}
+    else
+      {[], collected}
+    end
+  end
+
   def call(%Event{step_result: result, total_parallel: total} = event, memo, _opts) do
     collected = memo ++ [result]
 
     if length(collected) >= total do
       # All results collected — separate successes and errors
       {successes, errors} =
-        Enum.split_with(collected, fn r -> not Map.has_key?(r, :error) end)
+        Enum.split_with(collected, fn r -> is_map(r) and not Map.has_key?(r, :error) end)
 
-      composed_event = %{event |
-        parallel_results: successes,
-        errors: event.errors ++ errors,
-        current_step: nil,
-        step_result: nil
+      composed_event = %{
+        event
+        | parallel_results: successes,
+          errors: event.errors ++ errors,
+          current_step: nil,
+          step_result: nil
       }
 
       {[composed_event], []}
