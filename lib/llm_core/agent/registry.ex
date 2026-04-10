@@ -316,10 +316,12 @@ defmodule LlmCore.Agent.Registry do
     base_state = %{state | agents: manual_agents, auto_agents: MapSet.new()}
 
     Enum.reduce(providers, base_state, fn %Definition{} = definition, acc_state ->
+      # `merge_provider_options/2` now returns an atom-keyed map, so the
+      # subsequent `normalize_agent_config/1` call was a no-op — removed.
+      # See GC-760 for the string/atom key collision bug this fixes.
       config =
         definition.agent_config
         |> merge_provider_options(definition.options)
-        |> normalize_agent_config()
         |> maybe_put_model(definition.default_model)
 
       aliases =
@@ -387,14 +389,23 @@ defmodule LlmCore.Agent.Registry do
     end)
   end
 
-  defp merge_provider_options(agent_config, nil), do: agent_config
-  defp merge_provider_options(nil, options), do: options
+  defp merge_provider_options(agent_config, nil), do: normalize_agent_config(agent_config)
+  defp merge_provider_options(nil, options), do: normalize_agent_config(options)
 
-  defp merge_provider_options(agent_config, options) when is_map(agent_config) and is_map(options) do
-    Map.merge(options, agent_config)
+  defp merge_provider_options(agent_config, options)
+       when is_map(agent_config) and is_map(options) do
+    # Both sides must be normalized to the same key type before merging,
+    # otherwise `:base_url` and `"base_url"` collide silently — see GC-760.
+    # `definition.agent_config` already has atom keys (normalized at Loader
+    # time), but `definition.options` comes straight from Toml.decode_file/1
+    # with string keys. Normalize options first, then merge so agent_config
+    # wins on any collision.
+    options
+    |> normalize_agent_config()
+    |> Map.merge(normalize_agent_config(agent_config))
   end
 
-  defp merge_provider_options(agent_config, _options), do: agent_config
+  defp merge_provider_options(agent_config, _options), do: normalize_agent_config(agent_config)
 
   defp maybe_put_model(map, nil), do: map
   defp maybe_put_model(map, model) when is_map(map), do: Map.put_new(map, :model, model)
