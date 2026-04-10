@@ -8,7 +8,7 @@ is merged, and how to inspect or edit runtime settings using the mix tasks.
 Configuration values are merged in the following order (later sources override
 earlier ones):
 
-1. **Default template** — `config/llm_core.toml` shipped with the lib
+1. **Default template** — `priv/config/llm_core.toml` shipped with the lib (bundled into the build artifact as `<app_priv>/config/llm_core.toml`)
 2. **Global override** — `~/.llm_core/config/llm_core.toml`
 3. **Project override** — `<project_root>/.llm_core/llm_core.toml`
 4. **Environment variable** — path in `LLM_CORE_CONFIG`

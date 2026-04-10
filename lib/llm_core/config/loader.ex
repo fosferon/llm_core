@@ -31,6 +31,11 @@ defmodule LlmCore.Config.Loader do
   @doc """
   Loads the routing configuration and writes it to the runtime store.
   Broadcasts change notifications so dependent processes can refresh.
+
+  When `routing.yml` is missing, the existing Store routing is preserved
+  (e.g. a table already installed from TOML via `reload_providers/1`). Only
+  when the Store has no routing at all does the safe `default => claude`
+  fallback get installed. See GC-758.
   """
   @spec reload_routing(keyword()) :: {:ok, RoutingTable.t()} | {:error, term()}
   def reload_routing(opts \\ []) do
@@ -41,10 +46,18 @@ defmodule LlmCore.Config.Loader do
         {:ok, table}
 
       {:error, :not_found} ->
-        table = RoutingTable.new(%{"default" => "claude"})
-        :ok = Store.put_routing(table)
-        dispatch_reload(:routing)
-        {:ok, table}
+        case Store.get_routing() do
+          {:ok, existing} ->
+            # Preserve routing already installed (e.g. from TOML via reload_providers).
+            # Overwriting here would clobber consumer-defined [routing.tasks.*] rules.
+            {:ok, existing}
+
+          {:error, :not_found} ->
+            table = RoutingTable.new(%{"default" => "claude"})
+            :ok = Store.put_routing(table)
+            dispatch_reload(:routing)
+            {:ok, table}
+        end
 
       error ->
         error
@@ -174,9 +187,14 @@ defmodule LlmCore.Config.Loader do
   end
 
   defp default_config_path do
-    Application.app_dir(:llm_core, Path.join("config", @config_filename))
-  rescue
-    _ -> nil
+    # Resolve via :code.priv_dir so the bundled defaults are found in the
+    # build artifact (`_build/<env>/lib/llm_core/priv/config/llm_core.toml`).
+    # Mix always copies `priv/` into the build dir, unlike top-level `config/`
+    # which is build-tool-only. See GC-758.
+    case :code.priv_dir(:llm_core) do
+      {:error, _} -> nil
+      priv -> Path.join([priv, "config", @config_filename])
+    end
   end
 
   defp read_toml(nil), do: {:error, :not_found}
