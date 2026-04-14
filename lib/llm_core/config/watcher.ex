@@ -30,17 +30,24 @@ defmodule LlmCore.Config.Watcher do
     watch_files = Keyword.get(opts, :files, ["routing.yml", "llm_core.toml"])
 
     File.mkdir_p!(dir)
-    {:ok, watcher} = FileSystem.start_link(dirs: [dir])
-    FileSystem.subscribe(watcher)
 
-    {:ok,
-     %{
-       config_dir: dir,
-       debounce_ms: debounce_ms,
-       files: MapSet.new(Enum.map(watch_files, &Path.expand(&1, dir))),
-       pending: MapSet.new(),
-       timer: nil
-     }}
+    case FileSystem.start_link(dirs: [dir]) do
+      {:ok, watcher} ->
+        FileSystem.subscribe(watcher)
+
+        {:ok,
+         %{
+           config_dir: dir,
+           debounce_ms: debounce_ms,
+           files: MapSet.new(Enum.map(watch_files, &Path.expand(&1, dir))),
+           pending: MapSet.new(),
+           timer: nil
+         }}
+
+      :ignore ->
+        Logger.warning("FileSystem watcher unavailable (inotify-tools missing?); config hot-reload disabled")
+        :ignore
+    end
   end
 
   @impl true
