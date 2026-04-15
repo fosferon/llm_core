@@ -51,6 +51,11 @@ defmodule LlmCore.Agent.Loop do
 
   @default_max_iterations 10
 
+  # When the same tool error repeats this many times consecutively,
+  # break out of the loop — it's a systematic bug, not a transient failure.
+  # The model can't fix it by varying arguments.
+  @error_repeat_threshold 3
+
   @doc """
   Runs the agentic loop.
 
@@ -106,7 +111,9 @@ defmodule LlmCore.Agent.Loop do
       resolver_module: resolver_module,
       max_iterations: max_iterations,
       on_iteration: on_iteration,
-      total_tool_calls: 0
+      total_tool_calls: 0,
+      last_error: nil,
+      error_repeat_count: 0
     }
 
     result =
@@ -195,13 +202,33 @@ defmodule LlmCore.Agent.Loop do
     maybe_notify(state.on_iteration, result_ctx)
     tool_calls_count = length(result_ctx.tool_calls)
 
-    updated_state = %{
-      state
-      | messages: state.messages ++ new_messages,
-        total_tool_calls: state.total_tool_calls + tool_calls_count
-    }
+    # Circuit breaker: detect repeated identical tool errors.
+    # When the same error message appears N times in a row, the tool has
+    # a systematic bug — the model can't fix it by varying arguments.
+    error_fingerprint = extract_error_fingerprint(result_ctx.tool_results)
+    {last_error, repeat_count} = update_error_tracker(state, error_fingerprint)
 
-    {:continue, updated_state}
+    if repeat_count >= @error_repeat_threshold do
+      require Logger
+
+      Logger.warning(
+        "[Agent.Loop] Circuit breaker: same tool error repeated #{repeat_count}x — breaking loop"
+      )
+
+      {:error,
+       {:circuit_breaker,
+        "Tool error repeated #{@error_repeat_threshold}+ times: #{inspect(last_error)}"}}
+    else
+      updated_state = %{
+        state
+        | messages: state.messages ++ new_messages,
+          total_tool_calls: state.total_tool_calls + tool_calls_count,
+          last_error: last_error,
+          error_repeat_count: repeat_count
+      }
+
+      {:continue, updated_state}
+    end
   end
 
   defp handle_pipeline_result(%Context{decision: {:error, reason}} = result_ctx, state) do
@@ -216,6 +243,39 @@ defmodule LlmCore.Agent.Loop do
 
   defp handle_pipeline_result(other, _state) do
     {:error, {:unexpected_pipeline_result, other}}
+  end
+
+  # Extract a fingerprint from tool results — all error messages joined.
+  # Returns nil if there are no errors (all tools succeeded).
+  defp extract_error_fingerprint(tool_results) when is_list(tool_results) do
+    errors =
+      tool_results
+      |> Enum.filter(fn
+        {:error, _} -> true
+        %{error: _} -> true
+        _ -> false
+      end)
+      |> Enum.map(fn
+        {:error, msg} -> to_string(msg)
+        %{error: msg} -> to_string(msg)
+      end)
+
+    if errors == [], do: nil, else: Enum.join(errors, " | ")
+  end
+
+  defp extract_error_fingerprint(_), do: nil
+
+  # Track consecutive identical error fingerprints.
+  # Same error → increment. Different error → reset counter. No error → reset.
+  defp update_error_tracker(_state, nil), do: {nil, 0}
+
+  defp update_error_tracker(%{last_error: last, error_repeat_count: count}, fingerprint)
+       when fingerprint == last do
+    {fingerprint, count + 1}
+  end
+
+  defp update_error_tracker(_state, fingerprint) do
+    {fingerprint, 1}
   end
 
   # -- Helpers ----------------------------------------------------------------
