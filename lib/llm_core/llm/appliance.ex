@@ -8,6 +8,7 @@ defmodule LlmCore.LLM.Appliance do
   @behaviour LlmCore.LLM.Provider
 
   alias LlmCore.LLM.{Response, Error, Messages, SSEParser}
+  alias LlmCore.Tool.Codec
 
   import Kernel, except: [send: 2]
 
@@ -37,7 +38,7 @@ defmodule LlmCore.LLM.Appliance do
     %{
       streaming: true,
       structured_output: true,
-      tool_use: false,
+      tool_use: true,
       vision: false,
       models: Application.get_env(:llm_core, :appliance_models, []),
       max_context: Application.get_env(:llm_core, :appliance_max_context)
@@ -69,7 +70,7 @@ defmodule LlmCore.LLM.Appliance do
              receive_timeout: timeout
            ) do
         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
-          {:ok, build_response(body)}
+          {:ok, build_response(body, opts)}
 
         {:ok, %Req.Response{status: status, body: body}} ->
           {:error, classify_error(status, body)}
@@ -145,10 +146,12 @@ defmodule LlmCore.LLM.Appliance do
   @doc false
   @spec build_payload(LlmCore.LLM.Provider.prompt(), keyword()) :: map()
   def build_payload(prompt, opts \\ []) do
-    %{
+    base = %{
       "model" => Keyword.get(opts, :model, default_model()),
       "messages" => Messages.normalize_chat(prompt)
     }
+
+    base
     |> maybe_put("temperature", Keyword.get(opts, :temperature))
     |> maybe_put("max_tokens", Keyword.get(opts, :max_tokens, default_max_tokens()))
     |> maybe_put("top_p", Keyword.get(opts, :top_p))
@@ -156,6 +159,7 @@ defmodule LlmCore.LLM.Appliance do
     |> maybe_put("presence_penalty", Keyword.get(opts, :presence_penalty))
     |> maybe_put("metadata", Keyword.get(opts, :metadata))
     |> maybe_put_response_format(Keyword.get(opts, :response_format))
+    |> maybe_put_tools(Keyword.get(opts, :tools))
   end
 
   @doc false
@@ -255,9 +259,20 @@ defmodule LlmCore.LLM.Appliance do
 
   defp receive_stream_chunks(:done), do: {:halt, :done}
 
-  defp build_response(body) do
+  defp build_response(body, opts) do
     choice = body["choices"] |> List.first() || %{}
     message = choice["message"] || %{}
+    finish_reason = choice["finish_reason"]
+
+    # Extract tool calls when the model requests them.
+    # OpenAI-compatible local servers use finish_reason "tool_calls"
+    # and the same wire format.
+    tool_calls =
+      if finish_reason == "tool_calls" do
+        Codec.decode_tool_calls(body, :openai)
+      else
+        nil
+      end
 
     usage =
       %{}
@@ -270,10 +285,11 @@ defmodule LlmCore.LLM.Appliance do
       provider: :appliance,
       model: body["model"] || message["model"],
       usage: usage,
+      tool_calls: tool_calls,
       raw: body,
       metadata: %{
         id: body["id"],
-        finish_reason: choice["finish_reason"]
+        finish_reason: finish_reason
       }
     )
   end
@@ -337,6 +353,12 @@ defmodule LlmCore.LLM.Appliance do
   end
 
   defp maybe_put_response_format(payload, _other), do: payload
+
+  defp maybe_put_tools(payload, nil), do: payload
+  defp maybe_put_tools(payload, []), do: payload
+  defp maybe_put_tools(payload, tools) when is_list(tools) do
+    Map.put(payload, "tools", Codec.encode_definitions(tools, :openai))
+  end
 
   defp build_headers(opts) do
     headers = Keyword.get(opts, :headers, [])

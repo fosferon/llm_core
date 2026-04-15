@@ -6,11 +6,11 @@ defmodule LlmCore.LLM.Zai do
   @behaviour LlmCore.LLM.Provider
 
   alias LlmCore.LLM.{Response, Error, Messages}
+  alias LlmCore.Tool.Codec
 
   import Kernel, except: [send: 2]
 
-  @default_timeout 60_000
-  # Hypothetical URL
+  @default_timeout 120_000
   @api_url "https://api.z.ai/v1/chat/completions"
 
   @doc """
@@ -31,10 +31,10 @@ defmodule LlmCore.LLM.Zai do
     %{
       streaming: true,
       structured_output: true,
-      tool_use: false,
+      tool_use: true,
       vision: false,
-      models: ["zai-1"],
-      max_context: 64_000
+      models: ["glm-5.1", "zai-1"],
+      max_context: 128_000
     }
   end
 
@@ -60,27 +60,43 @@ defmodule LlmCore.LLM.Zai do
   end
 
   defp do_send(prompt, opts) do
-    model = Keyword.get(opts, :model, "zai-1")
+    model = Keyword.get(opts, :model, "glm-5.1")
+    tools = Keyword.get(opts, :tools)
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    req_body = %{
-      model: model,
-      messages: Messages.normalize_chat(prompt)
-    }
+    req_body =
+      %{
+        model: model,
+        messages: Messages.normalize_chat(prompt)
+      }
+      |> maybe_put(:temperature, opts[:temperature])
+      |> maybe_put(:max_tokens, opts[:max_tokens])
+      |> maybe_put_tools(tools)
 
     headers = [
       {"Authorization", "Bearer #{System.get_env("ZAI_API_KEY")}"},
       {"Content-Type", "application/json"}
     ]
 
-    case Req.post(@api_url, json: req_body, headers: headers, receive_timeout: @default_timeout) do
+    case Req.post(@api_url, json: req_body, headers: headers, receive_timeout: timeout) do
       {:ok, %Req.Response{status: 200, body: body}} ->
         content = get_in(body, ["choices", Access.at(0), "message", "content"])
+        finish_reason = get_in(body, ["choices", Access.at(0), "finish_reason"])
+
+        tool_calls =
+          if finish_reason == "tool_calls" do
+            Codec.decode_tool_calls(body, :openai)
+          else
+            nil
+          end
 
         {:ok,
          Response.new(
            content: content,
            provider: :zai,
            model: model,
+           usage: extract_usage(body),
+           tool_calls: tool_calls,
            raw: body
          )}
 
@@ -203,4 +219,23 @@ defmodule LlmCore.LLM.Zai do
 
   defp extract_delta(%{"choices" => [%{"delta" => %{"content" => content}} | _]}), do: content
   defp extract_delta(_), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_put_tools(body, nil), do: body
+  defp maybe_put_tools(body, []), do: body
+  defp maybe_put_tools(body, tools) when is_list(tools) do
+    Map.put(body, :tools, Codec.encode_definitions(tools, :openai))
+  end
+
+  defp extract_usage(%{"usage" => usage}) when is_map(usage) do
+    %{
+      prompt_tokens: usage["prompt_tokens"],
+      completion_tokens: usage["completion_tokens"],
+      total_tokens: usage["total_tokens"]
+    }
+  end
+
+  defp extract_usage(_), do: nil
 end
