@@ -14,8 +14,8 @@ defmodule LlmCore.Tool.Validator do
   validator dependency.
   """
 
-  alias LlmCore.Tool
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool
+  alias LlmToolkit.Tool.Call
 
   @doc """
   Validates that a tool call's arguments satisfy the tool's parameter schema.
@@ -25,7 +25,7 @@ defmodule LlmCore.Tool.Validator do
 
   ## Examples
 
-      iex> tool = %LlmCore.Tool{
+      iex> tool = %LlmToolkit.Tool{
       ...>   name: "search",
       ...>   description: "Search",
       ...>   parameters: %{
@@ -38,11 +38,11 @@ defmodule LlmCore.Tool.Validator do
       ...>   },
       ...>   metadata: %{}
       ...> }
-      iex> call = %LlmCore.Tool.Call{id: "1", name: "search", arguments: %{"query" => "hello"}}
+      iex> call = %LlmToolkit.Tool.Call{id: "1", name: "search", arguments: %{"query" => "hello"}}
       iex> LlmCore.Tool.Validator.validate_call(call, tool)
       :ok
 
-      iex> bad_call = %LlmCore.Tool.Call{id: "2", name: "search", arguments: %{}}
+      iex> bad_call = %LlmToolkit.Tool.Call{id: "2", name: "search", arguments: %{}}
       iex> LlmCore.Tool.Validator.validate_call(bad_call, tool)
       {:error, ["missing required field: query"]}
   """

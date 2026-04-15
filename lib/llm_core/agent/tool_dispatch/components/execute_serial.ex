@@ -10,7 +10,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ExecuteSerial do
   """
 
   alias LlmCore.Agent.ToolDispatch.Event
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool.Call
 
   @doc """
   Runs serial steps in order, threading results forward.

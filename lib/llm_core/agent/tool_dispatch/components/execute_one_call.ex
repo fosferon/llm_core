@@ -11,7 +11,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ExecuteOneCall do
   """
 
   alias LlmCore.Agent.ToolDispatch.Event
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool.Call
 
   @doc """
   Executes the tool call specified by `current_step`.

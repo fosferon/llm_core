@@ -13,7 +13,7 @@ defmodule LlmCore.Agent.Context do
   ### Input — set by the outer loop before pipeline entry
 
     * `messages` — Current message list (grows each iteration)
-    * `tools` — Available tool definitions (`[LlmCore.Tool.t()]`)
+    * `tools` — Available tool definitions (`[LlmToolkit.Tool.t()]`)
     * `response` — The LLM response for this iteration
     * `resolve_tool` — `fn(%Call{}) -> {:ok, String.t()} | {:error, String.t()}`
     * `resolver_module` — Optional module implementing `ToolResolver` behaviour.
@@ -39,9 +39,9 @@ defmodule LlmCore.Agent.Context do
   """
 
   alias LlmCore.LLM.Response
-  alias LlmCore.Tool
-  alias LlmCore.Tool.Call
-  alias LlmCore.Tool.Result
+  alias LlmToolkit.Tool
+  alias LlmToolkit.Tool.Call
+  alias LlmToolkit.Tool.Result
 
   @type decision ::
           {:continue, [map()]}

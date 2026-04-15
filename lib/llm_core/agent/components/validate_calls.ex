@@ -14,7 +14,7 @@ defmodule LlmCore.Agent.Components.ValidateCalls do
   """
 
   alias LlmCore.Agent.Context
-  alias LlmCore.Tool.Result
+  alias LlmToolkit.Tool.Result
   alias LlmCore.Tool.Validator
 
   @doc """
@@ -73,8 +73,8 @@ defmodule LlmCore.Agent.Components.ValidateCalls do
 
   # -- Private ----------------------------------------------------------------
 
-  @spec validate_arguments([LlmCore.Tool.Call.t()], map()) ::
-          {[LlmCore.Tool.Call.t()], [Result.t()], [term()]}
+  @spec validate_arguments([LlmToolkit.Tool.Call.t()], map()) ::
+          {[LlmToolkit.Tool.Call.t()], [Result.t()], [term()]}
   defp validate_arguments(calls, tool_map) do
     Enum.reduce(calls, {[], [], []}, fn call, {valid_acc, result_acc, error_acc} ->
       tool = Map.fetch!(tool_map, call.name)

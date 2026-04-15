@@ -78,10 +78,10 @@ defmodule LlmCore.LLM.OpenAI do
   @doc """
   Sends a prompt to the OpenAI-compatible chat completions endpoint.
 
-  When `opts[:tools]` contains a list of `LlmCore.Tool` structs, tool
+  When `opts[:tools]` contains a list of `LlmToolkit.Tool` structs, tool
   definitions are encoded into the request body. If the model responds
   with `finish_reason: "tool_calls"`, the returned `Response.tool_calls`
-  will contain decoded `LlmCore.Tool.Call` structs.
+  will contain decoded `LlmToolkit.Tool.Call` structs.
   """
   @impl true
   @spec send(LlmCore.LLM.Provider.prompt(), keyword()) ::
@@ -232,7 +232,7 @@ defmodule LlmCore.LLM.OpenAI do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  @spec maybe_put_tools(map(), [LlmCore.Tool.t()] | nil) :: map()
+  @spec maybe_put_tools(map(), [LlmToolkit.Tool.t()] | nil) :: map()
   defp maybe_put_tools(body, nil), do: body
   defp maybe_put_tools(body, []), do: body
 

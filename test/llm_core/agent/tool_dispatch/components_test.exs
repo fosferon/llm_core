@@ -12,7 +12,7 @@ defmodule LlmCore.Agent.ToolDispatch.ComponentsTest do
     CollectResults,
     ComposeOutput
   }
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool.Call
 
   # ---------------------------------------------------------------------------
   # Helpers

@@ -5,11 +5,11 @@ defmodule LlmCore.Tool.Codec do
 
   Three operations, three providers:
 
-    * `encode_definitions/2` — Converts `[LlmCore.Tool.t()]` into the
+    * `encode_definitions/2` — Converts `[LlmToolkit.Tool.t()]` into the
       provider's request payload format for tool declarations.
-    * `decode_tool_calls/2` — Extracts `[LlmCore.Tool.Call.t()]` from a
+    * `decode_tool_calls/2` — Extracts `[LlmToolkit.Tool.Call.t()]` from a
       raw provider response body.
-    * `encode_result/2` — Formats a `LlmCore.Tool.Result.t()` as the
+    * `encode_result/2` — Formats a `LlmToolkit.Tool.Result.t()` as the
       provider's expected tool-result message.
 
   ## Provider Format Differences
@@ -24,8 +24,8 @@ defmodule LlmCore.Tool.Codec do
   | Result ID ref      | `tool_call_id`            | `tool_use_id`          | (none)                    |
   """
 
-  alias LlmCore.Tool
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool
+  alias LlmToolkit.Tool.Call
 
   @type provider :: :openai | :anthropic | :ollama
 
@@ -39,7 +39,7 @@ defmodule LlmCore.Tool.Codec do
 
   ## Examples
 
-      iex> tool = %LlmCore.Tool{name: "ping", description: "Ping", parameters: %{"type" => "object"}, metadata: %{}}
+      iex> tool = %LlmToolkit.Tool{name: "ping", description: "Ping", parameters: %{"type" => "object"}, metadata: %{}}
       iex> [encoded] = LlmCore.Tool.Codec.encode_definitions([tool], :openai)
       iex> encoded["type"]
       "function"
@@ -66,7 +66,7 @@ defmodule LlmCore.Tool.Codec do
 
   @doc """
   Decodes tool call requests from a raw provider response body into
-  provider-neutral `LlmCore.Tool.Call` structs.
+  provider-neutral `LlmToolkit.Tool.Call` structs.
 
   ## OpenAI
 
@@ -127,8 +127,8 @@ defmodule LlmCore.Tool.Codec do
 
       %{"role" => "tool", "content" => content}
   """
-  @spec encode_result(LlmCore.Tool.Result.t(), provider()) :: map()
-  def encode_result(%LlmCore.Tool.Result{} = result, :openai) do
+  @spec encode_result(LlmToolkit.Tool.Result.t(), provider()) :: map()
+  def encode_result(%LlmToolkit.Tool.Result{} = result, :openai) do
     %{
       "role" => "tool",
       "tool_call_id" => result.tool_call_id,
@@ -136,7 +136,7 @@ defmodule LlmCore.Tool.Codec do
     }
   end
 
-  def encode_result(%LlmCore.Tool.Result{} = result, :anthropic) do
+  def encode_result(%LlmToolkit.Tool.Result{} = result, :anthropic) do
     %{
       "role" => "user",
       "content" => [
@@ -149,7 +149,7 @@ defmodule LlmCore.Tool.Codec do
     }
   end
 
-  def encode_result(%LlmCore.Tool.Result{} = result, :ollama) do
+  def encode_result(%LlmToolkit.Tool.Result{} = result, :ollama) do
     %{
       "role" => "tool",
       "content" => result.content

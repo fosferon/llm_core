@@ -34,7 +34,7 @@ defmodule LlmCore.LLM.Response do
           raw: map() | nil,
           metadata: map() | nil,
           structured: any() | nil,
-          tool_calls: [LlmCore.Tool.Call.t()] | nil
+          tool_calls: [LlmToolkit.Tool.Call.t()] | nil
         }
 
   @enforce_keys []

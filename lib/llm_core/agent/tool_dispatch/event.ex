@@ -32,7 +32,7 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
     * `error` — Error detail when `status == :error`
   """
 
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool.Call
 
   @type t :: %__MODULE__{
           call: Call.t() | nil,

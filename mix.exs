@@ -50,6 +50,8 @@ defmodule LlmCore.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      # Tool contract + base tools (ToolResolver, Tool, Call, Result)
+      {:llm_toolkit, git: "https://github.com/fosferon/llm_toolkit.git"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.9"},

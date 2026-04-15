@@ -3,7 +3,7 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   Executes validated tool calls via the resolver function.
 
   Calls `resolve_tool.(call)` for each validated tool call and collects
-  results as `LlmCore.Tool.Result` structs. Failed tool executions produce
+  results as `LlmToolkit.Tool.Result` structs. Failed tool executions produce
   error results (not pipeline errors) — the LLM sees the error message and
   can self-correct.
 
@@ -24,8 +24,8 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   alias LlmCore.Agent.Context
   alias LlmCore.Agent.Pipeline.ToolDispatch, as: ToolDispatchPipeline
   alias LlmCore.Agent.ToolDispatch.Event, as: DispatchEvent
-  alias LlmCore.Tool.Call
-  alias LlmCore.Tool.Result
+  alias LlmToolkit.Tool.Call
+  alias LlmToolkit.Tool.Result
 
   @doc """
   Dispatches each tool call through the resolver and collects results.

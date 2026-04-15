@@ -3,7 +3,7 @@ defmodule LlmCore.Agent.ToolDispatch.PipelineTest do
 
   alias LlmCore.Agent.Pipeline.ToolDispatch, as: ToolDispatchPipeline
   alias LlmCore.Agent.ToolDispatch.Event
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool.Call
 
   # ---------------------------------------------------------------------------
   # Setup / teardown

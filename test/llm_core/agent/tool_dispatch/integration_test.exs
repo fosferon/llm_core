@@ -4,7 +4,7 @@ defmodule LlmCore.Agent.ToolDispatch.IntegrationTest do
   alias LlmCore.Agent.Components.DispatchTools
   alias LlmCore.Agent.Context
   alias LlmCore.Agent.Pipeline.ToolDispatch, as: ToolDispatchPipeline
-  alias LlmCore.Tool.Call
+  alias LlmToolkit.Tool.Call
 
   # ---------------------------------------------------------------------------
   # Test resolver modules
@@ -12,7 +12,7 @@ defmodule LlmCore.Agent.ToolDispatch.IntegrationTest do
 
   defmodule ResolverWithRecipes do
     @moduledoc false
-    @behaviour LlmCore.Agent.ToolResolver
+    @behaviour LlmToolkit.ToolResolver
 
     @impl true
     def resolve(%Call{name: "simple_tool"}) do
@@ -54,7 +54,7 @@ defmodule LlmCore.Agent.ToolDispatch.IntegrationTest do
 
   defmodule ResolverWithoutRecipes do
     @moduledoc false
-    @behaviour LlmCore.Agent.ToolResolver
+    @behaviour LlmToolkit.ToolResolver
 
     @impl true
     def resolve(%Call{name: "simple_tool"}) do

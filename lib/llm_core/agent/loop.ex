@@ -40,8 +40,8 @@ defmodule LlmCore.Agent.Loop do
           ([map()], keyword() -> {:ok, LlmCore.LLM.Response.t()} | {:error, term()})
 
   @type opts :: [
-          {:tools, [LlmCore.Tool.t()]}
-          | {:resolve_tool, (LlmCore.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
+          {:tools, [LlmToolkit.Tool.t()]}
+          | {:resolve_tool, (LlmToolkit.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
           | {:resolver_module, module() | nil}
           | {:max_iterations, pos_integer()}
           | {:on_iteration, (Context.t() -> :ok) | nil}
@@ -70,7 +70,7 @@ defmodule LlmCore.Agent.Loop do
     * `messages` — Initial message list (system prompt, history, user message)
     * `llm_send_fn` — `fn(messages, opts) -> {:ok, Response.t()} | {:error, term()}`
     * `opts` — Configuration keyword list:
-      * `:tools` — (required) list of `LlmCore.Tool.t()` definitions
+      * `:tools` — (required) list of `LlmToolkit.Tool.t()` definitions
       * `:resolve_tool` — (required) `fn(Call.t()) -> {:ok, string} | {:error, string}`
       * `:resolver_module` — optional module implementing `ToolResolver` behaviour.
         When set, `DispatchTools` checks for dispatch recipes via
