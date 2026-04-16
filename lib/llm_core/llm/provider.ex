@@ -179,4 +179,48 @@ defmodule LlmCore.LLM.Provider do
       #=> :api
   """
   @callback provider_type() :: :cli | :api | :local
+
+  # ── Unified Dispatch ──────────────────────────────────────
+  #
+  # Handles both module-based providers (legacy) and struct-based
+  # providers (CLIProvider). Callers should use dispatch/3 instead
+  # of calling provider.send/2 directly.
+
+  @doc """
+  Dispatches a prompt to the provider, handling both modules and structs.
+
+  Module-based providers: calls `provider.send(prompt, opts)`.
+  Struct-based providers (CLIProvider): calls `CLIProvider.send(provider, prompt, opts)`.
+  """
+  @spec dispatch(module() | struct(), String.t(), keyword()) ::
+          {:ok, Response.t()} | {:error, Error.t()}
+  def dispatch(provider, prompt, opts \\ [])
+
+  def dispatch(%LlmCore.LLM.CLIProvider{} = provider, prompt, opts) do
+    LlmCore.LLM.CLIProvider.send(provider, prompt, opts)
+  end
+
+  def dispatch(%{__struct__: struct_mod} = provider, prompt, opts) do
+    struct_mod.send(provider, prompt, opts)
+  end
+
+  def dispatch(provider, prompt, opts) when is_atom(provider) do
+    provider.send(prompt, opts)
+  end
+
+  @doc """
+  Checks provider availability, handling both modules and structs.
+  """
+  @spec dispatch_available?(module() | struct()) :: boolean()
+  def dispatch_available?(%LlmCore.LLM.CLIProvider{} = provider) do
+    LlmCore.LLM.CLIProvider.available?(provider)
+  end
+
+  def dispatch_available?(%{__struct__: struct_mod} = provider) do
+    struct_mod.available?(provider)
+  end
+
+  def dispatch_available?(provider) when is_atom(provider) do
+    provider.available?()
+  end
 end
