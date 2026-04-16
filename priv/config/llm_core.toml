@@ -89,3 +89,70 @@ structured_output = true
 tool_use = false
 vision = false
 streaming = true
+
+[providers.appliance]
+module = "LlmCore.LLM.Appliance"
+type = "local"
+enabled = true
+default_model = "qwen3.5-27b-claude-4.6-opus-distilled-mlx"
+aliases = ["appliance", "local", "lmstudio"]
+cost_tier = "free"
+
+[providers.appliance.capabilities]
+tool_use = true
+streaming = true
+
+[providers.zai]
+module = "LlmCore.LLM.Zai"
+type = "cloud"
+enabled = true
+default_model = "glm-5.1"
+aliases = ["zai", "z"]
+cost_tier = "plan"
+
+[providers.zai.auth]
+api_key_env = "ZAI_API_KEY"
+
+[providers.zai.capabilities]
+tool_use = true
+streaming = true
+
+# ── Native Provider Cascade ──────────────────────────────────
+#
+# The ordered list of providers tried when dispatching an in-process
+# agentic loop. First available wins.
+#
+# Change this when subscriptions change, local hardware changes,
+# or you want to prioritize a different provider.
+
+[native]
+cascade = ["appliance", "zai", "anthropic"]
+
+[native.default_models]
+appliance = "qwen3.5-27b-claude-4.6-opus-distilled-mlx"
+zai = "glm-5.1"
+anthropic = "claude-sonnet-4-6"
+
+# When a model name contains these substrings, route to the named provider.
+# Evaluated in order; first match wins. Applies when model is specified
+# but not found on the appliance.
+
+[[native.model_routing]]
+pattern = "claude"
+provider = "anthropic"
+
+[[native.model_routing]]
+pattern = "glm"
+provider = "zai"
+
+[[native.model_routing]]
+pattern = "zai"
+provider = "zai"
+
+[[native.model_routing]]
+pattern = "gpt"
+provider = "openai"
+
+[[native.model_routing]]
+pattern = "openai"
+provider = "openai"
