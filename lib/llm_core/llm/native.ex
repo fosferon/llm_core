@@ -30,7 +30,9 @@ defmodule LlmCore.LLM.Native do
 
   @behaviour LlmCore.LLM.Provider
 
-  alias LlmCore.LLM.{Response, Error, Appliance}
+  alias LlmCore.LLM.{Response, Error}
+  alias LlmCore.LLM.Native.Router
+
   alias LlmCore.Agent.Loop
   alias LlmToolkit.CodeTools
 
@@ -173,101 +175,54 @@ defmodule LlmCore.LLM.Native do
   # All of this is configurable — change the TOML, not the code.
 
   defp resolve_provider(model) when is_binary(model) do
-    lower = String.downcase(model)
+    config = read_native_config()
+    appliance_has = appliance_available?() and model_available_on_appliance?(model)
 
-    # Always try local appliance first if the model is loaded there,
-    # regardless of model name patterns (local = free).
-    if appliance_available?() and model_available_on_appliance?(model) do
-      {LlmCore.LLM.Appliance, model}
-    else
-      case route_model(lower) do
-        {:ok, provider_alias} ->
-          case resolve_alias(provider_alias, model) do
-            {:ok, _} = result -> result
-            :unavailable -> cascade_fallback(model)
-          end
-
-        :no_match ->
-          cascade_fallback(model)
-      end
-    end
-  end
-
-  defp resolve_provider(nil) do
-    cascade_fallback(nil)
-  end
-
-  # Walk the cascade from TOML config. First available provider wins.
-  defp cascade_fallback(model) do
-    cascade = native_config(:cascade, ["appliance", "zai", "anthropic"])
-    defaults = native_config(:default_models, %{})
-
-    case find_available(cascade) do
-      {:ok, alias, provider_mod} ->
-        resolved_model = model || Map.get(defaults, to_string(alias)) || ""
+    case Router.resolve(model, config, appliance_has_model: appliance_has) do
+      {:ok, {provider_mod, resolved_model}} ->
         {provider_mod, resolved_model}
 
-      :none ->
+      {:error, :no_provider} ->
         raise "no LLM API provider available — check [native] cascade in llm_core.toml"
     end
   end
 
-  defp find_available([]), do: :none
+  defp resolve_provider(nil) do
+    config = read_native_config()
 
-  defp find_available([alias | rest]) do
-    case alias_to_module(alias) do
-      {:ok, mod} when is_atom(mod) ->
-        if mod.available?(), do: {:ok, alias, mod}, else: find_available(rest)
+    case Router.resolve(nil, config) do
+      {:ok, {provider_mod, resolved_model}} ->
+        {provider_mod, resolved_model}
 
-      :unknown ->
-        find_available(rest)
+      {:error, :no_provider} ->
+        raise "no LLM API provider available — check [native] cascade in llm_core.toml"
     end
   end
 
-  # Match model name against [[native.model_routing]] patterns.
-  defp route_model(lower) do
-    routing = native_config(:model_routing, [])
-
-    Enum.find_value(routing, :no_match, fn entry ->
-      pattern = Map.get(entry, "pattern", "")
-
-      if String.contains?(lower, pattern) do
-        {:ok, Map.get(entry, "provider", "")}
-      else
-        nil
-      end
-    end)
+  # Read [native] config from Application env (loaded from TOML at startup).
+  defp read_native_config do
+        Application.get_env(:llm_core, :native, default_native_config())
   end
 
-  # Resolve a TOML alias to a provider module + model.
-  defp resolve_alias(alias, model) do
-    case alias_to_module(alias) do
-      {:ok, mod} ->
-        if mod.available?() do
-          {:ok, {mod, model}}
-        else
-          :unavailable
-        end
-
-      :unknown ->
-        :unavailable
-    end
+  defp default_native_config do
+    %{
+      cascade: ["appliance", "zai", "anthropic"],
+      default_models: %{
+        "appliance" => "qwen3.5-27b-claude-4.6-opus-distilled-mlx",
+        "zai" => "glm-5.1",
+        "anthropic" => "claude-sonnet-4-6"
+      },
+      model_routing: [
+        %{"pattern" => "claude", "provider" => "anthropic"},
+        %{"pattern" => "glm", "provider" => "zai"},
+        %{"pattern" => "zai", "provider" => "zai"},
+        %{"pattern" => "gpt", "provider" => "openai"},
+        %{"pattern" => "openai", "provider" => "openai"}
+      ]
+    }
   end
-
-  defp alias_to_module("appliance"), do: {:ok, LlmCore.LLM.Appliance}
-  defp alias_to_module("zai"), do: {:ok, LlmCore.LLM.Zai}
-  defp alias_to_module("anthropic"), do: {:ok, LlmCore.LLM.Anthropic}
-  defp alias_to_module("openai"), do: {:ok, LlmCore.LLM.OpenAI}
-  defp alias_to_module(_), do: :unknown
 
   defp appliance_available?, do: LlmCore.LLM.Appliance.available?()
-
-  # Read a key from the [native] TOML section.
-  # Falls back to Application env, then the given default.
-  defp native_config(key, default) do
-    Application.get_env(:llm_core, :native, %{})
-    |> Map.get(key, default)
-  end
 
   # ── LLM Send Function ──────────────────────────────────────
 
@@ -284,7 +239,7 @@ defmodule LlmCore.LLM.Native do
 
         _ ->
           ids =
-            case Appliance.discover() do
+            case LlmCore.LLM.Appliance.discover() do
               [{_, %URI{} = uri} | _] ->
                 url = String.trim_trailing(URI.to_string(uri), "/") <> "/v1/models"
 
