@@ -178,7 +178,7 @@ defmodule LlmCore.LLM.Provider do
       MyProvider.provider_type()
       #=> :api
   """
-  @callback provider_type() :: :cli | :api | :local
+  @callback provider_type() :: :cli | :api | :local | :workflow
 
   # ── Unified Dispatch ──────────────────────────────────────
   #
