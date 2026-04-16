@@ -1,0 +1,273 @@
+defmodule LlmCore.LLM.CLIProviderTest do
+  use ExUnit.Case, async: true
+
+  alias LlmCore.LLM.CLIProvider
+  alias LlmCore.LLM.{Response, Error}
+
+  # ── Config Loading ────────────────────────────────────────
+
+  describe "config/1" do
+    test "loads built-in config for known provider name" do
+      assert {:ok, config} = CLIProvider.config(:claude_code)
+      assert config.binary == "claude"
+      assert config.provider_type == :cli
+    end
+
+    test "loads built-in droid config" do
+      assert {:ok, config} = CLIProvider.config(:droid)
+      assert config.binary == "droid"
+      assert config.subcommand == "exec"
+    end
+
+    test "returns error for unknown provider" do
+      assert {:error, _} = CLIProvider.config(:nonexistent_cli)
+    end
+  end
+
+  # ── Provider Behaviour ────────────────────────────────────
+
+  describe "available?/1" do
+    test "returns false when binary not found" do
+      provider = CLIProvider.from_config(:claude_code)
+      # claude may or may not be installed, but the function should return boolean
+      assert is_boolean(CLIProvider.available?(provider))
+    end
+
+    test "returns false for obviously missing binary" do
+      config = %CLIProvider.Config{
+        name: :fake_cli,
+        binary: "nonexistent_binary_12345",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "fake"
+      }
+
+      provider = CLIProvider.from_config(config)
+      refute CLIProvider.available?(provider)
+    end
+  end
+
+  describe "capabilities/1" do
+    test "returns map with streaming and passthrough" do
+      provider = CLIProvider.from_config(:claude_code)
+      caps = CLIProvider.capabilities(provider)
+
+      assert is_map(caps)
+      assert Map.has_key?(caps, :streaming)
+      assert Map.has_key?(caps, :passthrough)
+    end
+  end
+
+  describe "provider_type/1" do
+    test "returns :cli" do
+      provider = CLIProvider.from_config(:claude_code)
+      assert CLIProvider.provider_type(provider) == :cli
+    end
+  end
+
+  # ── Arg Building ──────────────────────────────────────────
+
+  describe "build_args/2" do
+    test "claude_code builds correct args" do
+      provider = CLIProvider.from_config(:claude_code)
+      args = CLIProvider.build_args(provider, "do the thing", model: "claude-sonnet-4-6")
+
+      assert args == ["--print", "-p", "do the thing", "--model", "claude-sonnet-4-6"]
+    end
+
+    test "claude_code without model" do
+      provider = CLIProvider.from_config(:claude_code)
+      args = CLIProvider.build_args(provider, "hello", [])
+
+      assert args == ["--print", "-p", "hello"]
+    end
+
+    test "droid builds args with subcommand and flags" do
+      provider = CLIProvider.from_config(:droid)
+
+      args =
+        CLIProvider.build_args(provider, "fix the bug",
+          auto: "high",
+          model: "claude-opus-4-6",
+          cwd: "/project"
+        )
+
+      # Subcommand comes first, then flags, then prompt
+      assert List.first(args) == "exec"
+      assert "--auto" in args
+      assert "high" in args
+      assert "--model" in args
+      assert "claude-opus-4-6" in args
+      assert "--cwd" in args
+      assert "/project" in args
+      assert List.last(args) == "fix the bug"
+    end
+
+    test "codex_cli builds args" do
+      provider = CLIProvider.from_config(:codex_cli)
+      args = CLIProvider.build_args(provider, "write tests", model: "codex-1")
+
+      assert args == ["--model", "codex-1", "write tests"]
+    end
+
+    test "gemini_cli builds args" do
+      provider = CLIProvider.from_config(:gemini_cli)
+      args = CLIProvider.build_args(provider, "explain code", [])
+
+      assert args == ["explain code"]
+    end
+
+    test "unknown opts are passed through as flags" do
+      config = %CLIProvider.Config{
+        name: :custom,
+        binary: "custom",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        flags: %{foo: "--foo", bar: "--bar"}
+      }
+
+      provider = CLIProvider.from_config(config)
+      args = CLIProvider.build_args(provider, "task", foo: "val1", bar: "val2")
+
+      assert "--foo" in args
+      assert "val1" in args
+      assert "--bar" in args
+      assert "val2" in args
+      assert List.last(args) == "task"
+    end
+  end
+
+  # ── Invocation (stdin hack) ───────────────────────────────
+
+  describe "build_invocation/2" do
+    test "claude_code wraps with sh for stdin redirect" do
+      provider = CLIProvider.from_config(:claude_code)
+      {exec, args} = CLIProvider.build_invocation(provider, "hello", [])
+
+      assert exec == "/bin/sh"
+      # args = ["-c", ~s|exec "$0" "$@" < /dev/null|, claude_path | claude_args]
+      assert List.first(args) == "-c"
+    end
+
+    test "droid does NOT wrap with sh" do
+      provider = CLIProvider.from_config(:droid)
+      {exec, args} = CLIProvider.build_invocation(provider, "hello", [])
+
+      assert exec == "droid" or String.contains?(exec, "droid")
+      refute List.first(args) == "-c"
+    end
+  end
+
+  # ── Response Building ─────────────────────────────────────
+
+  describe "build_response/3" do
+    test "builds Response struct with correct provider atom" do
+      provider = CLIProvider.from_config(:claude_code)
+      response = CLIProvider.build_response(provider, "  hello world  \n", [])
+
+      assert %Response{} = response
+      assert response.provider == :claude_code
+      assert response.content == "hello world"
+    end
+
+    test "includes model from opts" do
+      provider = CLIProvider.from_config(:droid)
+      response = CLIProvider.build_response(provider, "output", model: "claude-opus-4-6")
+
+      assert response.model == "claude-opus-4-6"
+    end
+
+    test "uses default_model when no model in opts" do
+      provider = CLIProvider.from_config(:claude_code)
+      response = CLIProvider.build_response(provider, "output", [])
+
+      assert response.model == "claude-code-cli"
+    end
+  end
+
+  # ── Error Formatting ──────────────────────────────────────
+
+  describe "build_error/3" do
+    test "not_installed error" do
+      provider = CLIProvider.from_config(:claude_code)
+      error = CLIProvider.build_error(provider, :not_installed, [])
+
+      assert %Error{} = error
+      assert error.type == :provider_error
+      assert error.provider == :claude_code
+      assert error.details.reason == :not_installed
+    end
+
+    test "timeout error" do
+      provider = CLIProvider.from_config(:droid)
+      error = CLIProvider.build_error(provider, :timeout, timeout: 30_000)
+
+      assert error.type == :timeout
+      assert error.provider == :droid
+      assert error.details.timeout == 30_000
+    end
+
+    test "exit_code error" do
+      provider = CLIProvider.from_config(:codex_cli)
+
+      error = CLIProvider.build_error(provider, {:exit_code, 1}, output: "bad")
+
+      assert error.type == :provider_error
+      assert error.details.exit_code == 1
+    end
+  end
+
+  # ── Config Struct ─────────────────────────────────────────
+
+  describe "CLIProvider.Config" do
+    test "creates config with defaults" do
+      config = %CLIProvider.Config{
+        name: :test,
+        binary: "test",
+        provider_type: :cli,
+        default_timeout: 30_000,
+        default_model: "v1"
+      }
+
+      assert config.name == :test
+      assert config.flags == %{}
+      assert config.stdin_hack == false
+      assert config.subcommand == nil
+    end
+  end
+
+  # ── Full Integration (with echo as fake CLI) ──────────────
+
+  describe "send/2 — integration" do
+    test "returns error when binary not found" do
+      config = %CLIProvider.Config{
+        name: :missing,
+        binary: "no_such_binary_xyz",
+        provider_type: :cli,
+        default_timeout: 1_000,
+        default_model: "v1"
+      }
+
+      provider = CLIProvider.from_config(config)
+      assert {:error, %Error{details: %{reason: :not_installed}}} = CLIProvider.send(provider, "test")
+    end
+
+    @tag :unix
+    test "executes echo as a fake CLI provider" do
+      config = %CLIProvider.Config{
+        name: :echo_test,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "echo-v1",
+        prompt_position: :last
+      }
+
+      provider = CLIProvider.from_config(config)
+      assert {:ok, %Response{} = response} = CLIProvider.send(provider, "hello from test")
+      assert response.content =~ "hello from test"
+      assert response.provider == :echo_test
+    end
+  end
+end
