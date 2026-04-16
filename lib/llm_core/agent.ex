@@ -18,7 +18,7 @@ defmodule LlmCore.Agent do
 
       %Agent{
         name: "steve",
-        provider: LlmCore.LLM.ClaudeCode,
+        provider: LlmCore.LLM.CLIProvider,
         config: %{model: "claude-3-opus", temperature: 0.7},
         registered_at: ~U[2024-01-12 10:30:00Z]
       }
@@ -31,7 +31,7 @@ defmodule LlmCore.Agent do
 
   @type t :: %__MODULE__{
           name: String.t(),
-          provider: module(),
+          provider: module() | struct(),
           config: map(),
           registered_at: DateTime.t()
         }
@@ -41,7 +41,8 @@ defmodule LlmCore.Agent do
     :name,
     :provider,
     config: %{},
-    registered_at: nil
+    registered_at: nil,
+    provider_struct: nil
   ]
 
   @name_regex ~r/^[a-z0-9][a-z0-9_-]*$/
@@ -62,19 +63,22 @@ defmodule LlmCore.Agent do
 
   ## Examples
 
-      iex> Agent.new("steve", LlmCore.LLM.ClaudeCode, %{model: "claude-3-opus"})
-      {:ok, %Agent{name: "steve", provider: LlmCore.LLM.ClaudeCode, ...}}
+      iex> Agent.new("steve", LlmCore.LLM.CLIProvider, %{model: "claude-3-opus"})
+      {:ok, %Agent{name: "steve", provider: LlmCore.LLM.CLIProvider, ...}}
 
-      iex> Agent.new("INVALID", LlmCore.LLM.ClaudeCode, %{})
+      iex> Agent.new("INVALID", LlmCore.LLM.CLIProvider, %{})
       {:error, :invalid_name}
   """
   @spec new(String.t(), module(), map()) :: {:ok, t()} | {:error, :invalid_name}
   def new(name, provider, config \\ %{}) do
     if valid_name?(name) do
+      provider_value = resolve_provider_value(provider, config)
+
       agent = %__MODULE__{
         name: name,
         provider: provider,
         config: config,
+        provider_struct: provider_value,
         registered_at: DateTime.utc_now()
       }
 
@@ -112,4 +116,34 @@ defmodule LlmCore.Agent do
   end
 
   def valid_name?(_), do: false
+
+  @doc """
+  Returns the dispatchable provider value.
+
+  For struct-based providers (CLIProvider, Appliance), returns the struct.
+  For module-based providers, returns the module atom.
+  """
+  @spec dispatch_provider(t()) :: module() | struct()
+  def dispatch_provider(%__MODULE__{provider_struct: %_{} = ps}), do: ps
+  def dispatch_provider(%__MODULE__{provider: provider}), do: provider
+
+  defp resolve_provider_value(%LlmCore.LLM.CLIProvider{} = p, _config), do: p
+  defp resolve_provider_value(module, config) when is_atom(module) do
+    if module == LlmCore.LLM.CLIProvider or function_exported?(module, :__struct__, 0) do
+      build_provider_struct(module, config)
+    else
+      nil
+    end
+  end
+  defp resolve_provider_value(_, _), do: nil
+
+  defp build_provider_struct(LlmCore.LLM.CLIProvider, config) do
+    cli_name = config[:cli_provider] || config["cli_provider"]
+    if cli_name do
+      LlmCore.LLM.CLIProvider.from_config(cli_name)
+    else
+      nil
+    end
+  end
+  defp build_provider_struct(module, _config), do: nil
 end

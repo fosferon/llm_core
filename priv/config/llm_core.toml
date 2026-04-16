@@ -103,12 +103,15 @@ tool_use = true
 streaming = true
 
 [providers.zai]
-module = "LlmCore.LLM.Zai"
+module = "LlmCore.LLM.OpenAI"
 type = "cloud"
 enabled = true
 default_model = "glm-5.1"
 aliases = ["zai", "z"]
 cost_tier = "plan"
+
+[providers.zai.config]
+base_url = "https://api.z.ai/v1"
 
 [providers.zai.auth]
 api_key_env = "ZAI_API_KEY"

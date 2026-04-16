@@ -139,7 +139,7 @@ defmodule LlmCore.Pipelines.InferencePipeline do
   def ensure_streaming_capable(%Context{mode: :send} = ctx, _opts), do: ctx
 
   def ensure_streaming_capable(%Context{mode: :stream, agent: %Agent{} = agent} = ctx, _opts) do
-    capabilities = safe_capabilities(agent.provider)
+    capabilities = safe_capabilities(agent)
 
     if Map.get(capabilities, :streaming, false) do
       ctx
@@ -160,7 +160,7 @@ defmodule LlmCore.Pipelines.InferencePipeline do
   end
 
   def ensure_structured_output_capable(%Context{agent: %Agent{} = agent} = ctx, _opts) do
-    capabilities = safe_capabilities(agent.provider)
+    capabilities = safe_capabilities(agent)
 
     if Map.get(capabilities, :structured_output, false) do
       ctx
@@ -180,14 +180,14 @@ defmodule LlmCore.Pipelines.InferencePipeline do
         %Context{mode: mode, prompt: prompt, provider_opts: opts, route: route} = ctx,
         _opts
       ) do
-    provider = route.agent.provider
+    provider = Agent.dispatch_provider(route.agent)
 
     result =
       Telemetry.span(:provider_dispatch, %{provider: provider, mode: mode}, fn ->
         dispatch_result =
           case mode do
-            :stream -> safe_apply(provider, :stream, [prompt, opts])
-            :send -> safe_apply(provider, :send, [prompt, opts])
+            :stream -> LlmCore.LLM.Provider.dispatch_stream(provider, prompt, opts)
+            :send -> LlmCore.LLM.Provider.dispatch(provider, prompt, opts)
           end
 
         measurement =
@@ -336,14 +336,19 @@ defmodule LlmCore.Pipelines.InferencePipeline do
   defp maybe_attach_response_format(opts, nil), do: opts
   defp maybe_attach_response_format(opts, format), do: Keyword.put(opts, :response_format, format)
 
-  defp safe_capabilities(provider) do
-    provider.capabilities()
+  defp safe_capabilities(agent) do
+    provider = Agent.dispatch_provider(agent)
+    case provider do
+      %LlmCore.LLM.CLIProvider{} -> LlmCore.LLM.CLIProvider.capabilities(provider)
+      mod when is_atom(mod) -> mod.capabilities()
+      %{__struct__: mod} -> mod.capabilities(provider)
+    end
   rescue
     _e -> %{}
   end
 
   defp safe_apply(provider, fun, args) do
-    apply(provider, fun, args)
+    LlmCore.LLM.Provider.dispatch(provider, hd(args), tl(args) |> List.first() || [])
   rescue
     exception -> {:error, {:provider_crash, exception}}
   end

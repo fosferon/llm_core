@@ -190,7 +190,7 @@ defmodule LlmCore.LLM.Provider do
   Dispatches a prompt to the provider, handling both modules and structs.
 
   Module-based providers: calls `provider.send(prompt, opts)`.
-  Struct-based providers (CLIProvider): calls `CLIProvider.send(provider, prompt, opts)`.
+  Struct-based providers: calls the struct's module `.send(struct, prompt, opts)`.
   """
   @spec dispatch(module() | struct(), String.t(), keyword()) ::
           {:ok, Response.t()} | {:error, Error.t()}
@@ -206,6 +206,25 @@ defmodule LlmCore.LLM.Provider do
 
   def dispatch(provider, prompt, opts) when is_atom(provider) do
     provider.send(prompt, opts)
+  end
+
+  @doc """
+  Dispatches a streaming prompt to the provider.
+  """
+  @spec dispatch_stream(module() | struct(), String.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t()}
+  def dispatch_stream(provider, prompt, opts \\ [])
+
+  def dispatch_stream(%LlmCore.LLM.CLIProvider{} = provider, prompt, opts) do
+    LlmCore.LLM.CLIProvider.stream(provider, prompt, opts)
+  end
+
+  def dispatch_stream(%{__struct__: struct_mod} = provider, prompt, opts) do
+    struct_mod.stream(provider, prompt, opts)
+  end
+
+  def dispatch_stream(provider, prompt, opts) when is_atom(provider) do
+    provider.stream(prompt, opts)
   end
 
   @doc """

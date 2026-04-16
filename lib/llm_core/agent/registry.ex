@@ -19,9 +19,9 @@ defmodule LlmCore.Agent.Registry do
 
       %{
         agents: %{
-          "steve" => %Agent{name: "steve", provider: LlmCore.LLM.ClaudeCode, ...},
-          "gemini" => %Agent{name: "gemini", provider: LlmCore.LLM.GeminiCLI, ...},
-          "codex" => %Agent{name: "codex", provider: LlmCore.LLM.CodexCLI, ...}
+          "steve" => %Agent{name: "steve", provider: LlmCore.LLM.CLIProvider, ...},
+          "gemini" => %Agent{name: "gemini", provider: LlmCore.LLM.CLIProvider, ...},
+          "codex" => %Agent{name: "codex", provider: LlmCore.LLM.CLIProvider, ...}
         }
       }
 
@@ -31,7 +31,7 @@ defmodule LlmCore.Agent.Registry do
       {:ok, pid} = Registry.start_link(name: LlmCore.Agent.Registry)
 
       # Register an agent
-      :ok = Registry.register("steve", LlmCore.LLM.ClaudeCode, %{model: "claude-3-opus"})
+      :ok = Registry.register("steve", LlmCore.LLM.CLIProvider, %{model: "claude-3-opus"})
 
       # Lookup an agent
       {:ok, agent} = Registry.get("steve")
@@ -58,9 +58,10 @@ defmodule LlmCore.Agent.Registry do
   @default_name __MODULE__
 
   @fallback_providers [
-    {"claude", LlmCore.LLM.ClaudeCode},
-    {"gemini", LlmCore.LLM.GeminiCLI},
-    {"codex", LlmCore.LLM.CodexCLI},
+    {"claude", LlmCore.LLM.CLIProvider},
+    {"gemini", LlmCore.LLM.CLIProvider},
+    {"codex", LlmCore.LLM.CLIProvider},
+    {"droid", LlmCore.LLM.CLIProvider},
     {"openai", LlmCore.LLM.OpenAI},
     {"zai", LlmCore.LLM.Zai}
   ]
@@ -104,7 +105,7 @@ defmodule LlmCore.Agent.Registry do
 
   ## Examples
 
-      :ok = Registry.register("steve", LlmCore.LLM.ClaudeCode, %{model: "claude-3-opus"})
+      :ok = Registry.register("steve", LlmCore.LLM.CLIProvider, %{model: "claude-3-opus"})
   """
   @spec register(GenServer.server(), String.t(), module(), map()) ::
           :ok | {:error, :already_registered | :invalid_name}
@@ -150,7 +151,7 @@ defmodule LlmCore.Agent.Registry do
 
       {:ok, agent} = Registry.get("steve")
       agent.provider
-      #=> LlmCore.LLM.ClaudeCode
+      #=> LlmCore.LLM.CLIProvider
   """
   @spec get(GenServer.server(), String.t()) :: {:ok, Agent.t()} | {:error, :not_found}
   def get(server \\ @default_name, name) do
