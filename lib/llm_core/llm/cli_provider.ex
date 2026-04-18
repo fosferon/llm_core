@@ -101,7 +101,12 @@ defmodule LlmCore.LLM.CLIProvider do
   alias LlmCore.LLM.{Response, Error}
   alias LlmCore.LLM.CLIProvider.Config
 
-  @behaviour LlmCore.LLM.Provider
+  # CLIProvider is a struct-based provider, not a module-conformant one.
+  # Its `available?/1`, `capabilities/1`, `provider_type/1`, `send/3`, and
+  # `stream/3` take the struct as the first argument, so it does not
+  # implement the module-style `LlmCore.LLM.Provider` behaviour. Callers
+  # invoke it through `LlmCore.LLM.Provider.dispatch/3`, which pattern-matches
+  # on `%CLIProvider{}` and routes to these functions.
 
   # ── Built-in Configs ───────────────────────────────────────
 
@@ -186,25 +191,21 @@ defmodule LlmCore.LLM.CLIProvider do
 
   def from_config(%Config{} = cfg), do: %__MODULE__{config: cfg}
 
-  # ── Provider Behaviour ────────────────────────────────────
+  # ── Provider API (struct-based; see Provider.dispatch/3) ─
 
-  @impl true
   @spec available?(t()) :: boolean()
   def available?(%__MODULE__{config: %Config{binary: bin}}) do
     System.find_executable(bin) != nil
   end
 
-  @impl true
   @spec capabilities(t()) :: map()
   def capabilities(%__MODULE__{}) do
     %{streaming: true, passthrough: true}
   end
 
-  @impl true
   @spec provider_type(t()) :: :cli
   def provider_type(%__MODULE__{}), do: :cli
 
-  @impl true
   @spec send(t(), String.t(), keyword()) :: {:ok, Response.t()} | {:error, Error.t()}
   def send(provider, prompt, opts \\ []) do
     if not available?(provider) do
@@ -214,7 +215,6 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
-  @impl true
   @spec stream(t(), String.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream(provider, prompt, opts \\ []) do
     if not available?(provider) do

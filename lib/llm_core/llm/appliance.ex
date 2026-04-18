@@ -259,7 +259,7 @@ defmodule LlmCore.LLM.Appliance do
 
   defp receive_stream_chunks(:done), do: {:halt, :done}
 
-  defp build_response(body, opts) do
+  defp build_response(body, _opts) do
     choice = body["choices"] |> List.first() || %{}
     message = choice["message"] || %{}
     finish_reason = choice["finish_reason"]
@@ -410,7 +410,6 @@ defmodule LlmCore.LLM.Appliance do
     content
     |> Enum.map(fn
       %{"text" => text} -> text
-      %{"type" => "text", "text" => text} -> text
       other -> to_string(other)
     end)
     |> Enum.join("")

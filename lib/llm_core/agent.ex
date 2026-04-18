@@ -145,5 +145,5 @@ defmodule LlmCore.Agent do
       nil
     end
   end
-  defp build_provider_struct(module, _config), do: nil
+  defp build_provider_struct(_module, _config), do: nil
 end

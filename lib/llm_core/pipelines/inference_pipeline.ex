@@ -347,12 +347,6 @@ defmodule LlmCore.Pipelines.InferencePipeline do
     _e -> %{}
   end
 
-  defp safe_apply(provider, fun, args) do
-    LlmCore.LLM.Provider.dispatch(provider, hd(args), tl(args) |> List.first() || [])
-  rescue
-    exception -> {:error, {:provider_crash, exception}}
-  end
-
   defp ensure_started do
     unless Manager.started?(__MODULE__) do
       :ok = Manager.start(__MODULE__, sync: true)
