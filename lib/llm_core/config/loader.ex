@@ -234,7 +234,7 @@ defmodule LlmCore.Config.Loader do
         |> normalize_capabilities()
         |> merge_capabilities(mod)
 
-      options = Map.get(attrs, "options", %{})
+      options = Map.merge(Map.get(attrs, "options", %{}), Map.get(attrs, "config", %{}))
       metadata = normalize_metadata(attrs)
       auth_defined? = Map.has_key?(attrs, "auth")
       auth = normalize_auth(Map.get(attrs, "auth", %{}), %{id: id, aliases: aliases, defined?: auth_defined?})

@@ -123,7 +123,7 @@ defmodule LlmCore.LLM.Native do
   defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider) do
     system_prompt = load_agent_prompt(agent_file)
 
-    {provider, resolved_model} = resolve_provider(model, llm_provider)
+    {provider, resolved_model, provider_opts} = resolve_provider(model, llm_provider)
 
     messages = [
       %{role: :system, content: system_prompt},
@@ -131,7 +131,7 @@ defmodule LlmCore.LLM.Native do
     ]
 
     tools = CodeTools.available_tools()
-    llm_send = build_llm_send(provider, resolved_model)
+    llm_send = build_llm_send(provider, resolved_model, provider_opts)
 
     Loop.run(
       messages,
@@ -180,23 +180,19 @@ defmodule LlmCore.LLM.Native do
   defp resolve_provider(model, llm_provider) when is_binary(model) do
     config = read_native_config()
 
-    # If caller explicitly targets a backend (e.g. "native:zai"), skip cascade
     if llm_provider do
-      mod = Router.alias_to_module(llm_provider)
-      default = Router.get_default_model(llm_provider, config)
+      case Router.resolve_provider(llm_provider) do
+        {:ok, {mod, resolved_model, opts}} ->
+          {mod, model || resolved_model, opts}
 
-      if mod do
-        {mod, model || default || ""}
-      else
-        raise "unknown LLM provider: #{llm_provider}"
+        {:error, :no_provider} ->
+          raise "unknown LLM provider: #{llm_provider}"
       end
     else
       appliance_has = appliance_available?() and model_available_on_appliance?(model)
 
       case Router.resolve(model, config, appliance_has_model: appliance_has) do
-        {:ok, {provider_mod, resolved_model}} ->
-          {provider_mod, resolved_model}
-
+        {:ok, result} -> result
         {:error, :no_provider} ->
           raise "no LLM API provider available — check [native] cascade in llm_core.toml"
       end
@@ -206,21 +202,15 @@ defmodule LlmCore.LLM.Native do
   defp resolve_provider(nil, llm_provider) do
     config = read_native_config()
 
-    # If caller explicitly targets a backend, skip cascade
     if llm_provider do
-      mod = Router.alias_to_module(llm_provider)
-      default = Router.get_default_model(llm_provider, config)
-
-      if mod do
-        {mod, default || ""}
-      else
-        raise "unknown LLM provider: #{llm_provider}"
+      case Router.resolve_provider(llm_provider) do
+        {:ok, result} -> result
+        {:error, :no_provider} ->
+          raise "unknown LLM provider: #{llm_provider}"
       end
     else
       case Router.resolve(nil, config) do
-        {:ok, {provider_mod, resolved_model}} ->
-          {provider_mod, resolved_model}
-
+        {:ok, result} -> result
         {:error, :no_provider} ->
           raise "no LLM API provider available — check [native] cascade in llm_core.toml"
       end
@@ -290,12 +280,15 @@ defmodule LlmCore.LLM.Native do
     model in models
   end
 
-  defp build_llm_send(provider, model) do
-    fn messages, opts ->
-      # Agentic tool-calling needs generous timeouts — thinking models
-      # can take 2-3 minutes per iteration with tool calls
-      opts = Keyword.put_new(opts, :timeout, 180_000)
-      provider.send(messages, Keyword.put(opts, :model, model))
+  defp build_llm_send(provider_mod, resolved_model, provider_opts \\ []) do
+    fn messages, loop_opts ->
+      loop_opts =
+        loop_opts
+        |> Keyword.put_new(:timeout, 180_000)
+        |> Keyword.put(:model, resolved_model)
+        |> Keyword.merge(provider_opts)
+
+      provider_mod.send(messages, loop_opts)
     end
   end
 end
