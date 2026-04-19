@@ -67,12 +67,13 @@ defmodule LlmCore.LLM.Native do
     agent_file = opts[:system_prompt_file]
     model = opts[:model]
     timeout = opts[:timeout]
+    llm_provider = opts[:llm_provider]
 
     start = System.monotonic_time(:millisecond)
 
     result =
       try do
-        do_send(prompt, cwd, agent_file, model, timeout)
+        do_send(prompt, cwd, agent_file, model, timeout, llm_provider)
       rescue
         e ->
           {:error, "Native dispatch crashed: #{Exception.message(e)}"}
@@ -117,10 +118,12 @@ defmodule LlmCore.LLM.Native do
 
   # ── Execution ──────────────────────────────────────────────
 
-  defp do_send(prompt, cwd, agent_file, model, _timeout) do
+  defp do_send(prompt, cwd, agent_file, model, timeout, llm_provider)
+
+  defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider) do
     system_prompt = load_agent_prompt(agent_file)
 
-    {provider, resolved_model} = resolve_provider(model)
+    {provider, resolved_model} = resolve_provider(model, llm_provider)
 
     messages = [
       %{role: :system, content: system_prompt},
@@ -174,28 +177,53 @@ defmodule LlmCore.LLM.Native do
   #
   # All of this is configurable — change the TOML, not the code.
 
-  defp resolve_provider(model) when is_binary(model) do
+  defp resolve_provider(model, llm_provider) when is_binary(model) do
     config = read_native_config()
-    appliance_has = appliance_available?() and model_available_on_appliance?(model)
 
-    case Router.resolve(model, config, appliance_has_model: appliance_has) do
-      {:ok, {provider_mod, resolved_model}} ->
-        {provider_mod, resolved_model}
+    # If caller explicitly targets a backend (e.g. "native:zai"), skip cascade
+    if llm_provider do
+      mod = Router.alias_to_module(llm_provider)
+      default = Router.get_default_model(llm_provider, config)
 
-      {:error, :no_provider} ->
-        raise "no LLM API provider available — check [native] cascade in llm_core.toml"
+      if mod do
+        {mod, model || default || ""}
+      else
+        raise "unknown LLM provider: #{llm_provider}"
+      end
+    else
+      appliance_has = appliance_available?() and model_available_on_appliance?(model)
+
+      case Router.resolve(model, config, appliance_has_model: appliance_has) do
+        {:ok, {provider_mod, resolved_model}} ->
+          {provider_mod, resolved_model}
+
+        {:error, :no_provider} ->
+          raise "no LLM API provider available — check [native] cascade in llm_core.toml"
+      end
     end
   end
 
-  defp resolve_provider(nil) do
+  defp resolve_provider(nil, llm_provider) do
     config = read_native_config()
 
-    case Router.resolve(nil, config) do
-      {:ok, {provider_mod, resolved_model}} ->
-        {provider_mod, resolved_model}
+    # If caller explicitly targets a backend, skip cascade
+    if llm_provider do
+      mod = Router.alias_to_module(llm_provider)
+      default = Router.get_default_model(llm_provider, config)
 
-      {:error, :no_provider} ->
-        raise "no LLM API provider available — check [native] cascade in llm_core.toml"
+      if mod do
+        {mod, default || ""}
+      else
+        raise "unknown LLM provider: #{llm_provider}"
+      end
+    else
+      case Router.resolve(nil, config) do
+        {:ok, {provider_mod, resolved_model}} ->
+          {provider_mod, resolved_model}
+
+        {:error, :no_provider} ->
+          raise "no LLM API provider available — check [native] cascade in llm_core.toml"
+      end
     end
   end
 
