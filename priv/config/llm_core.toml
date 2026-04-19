@@ -111,7 +111,7 @@ aliases = ["zai", "z"]
 cost_tier = "plan"
 
 [providers.zai.config]
-base_url = "https://api.z.ai/v1"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
 
 [providers.zai.auth]
 api_key_env = "ZAI_API_KEY"
