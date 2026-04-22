@@ -82,6 +82,22 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert args == ["--print", "-p", "hello"]
     end
 
+    test "claude_code supports permission-mode and boolean permission bypass flags" do
+      provider = CLIProvider.from_config(:claude_code)
+
+      args =
+        CLIProvider.build_args(provider, "run task",
+          permission_mode: "bypassPermissions",
+          dangerously_skip_permissions: true,
+          allow_dangerously_skip_permissions: true
+        )
+
+      assert "--permission-mode" in args
+      assert "bypassPermissions" in args
+      assert "--dangerously-skip-permissions" in args
+      assert "--allow-dangerously-skip-permissions" in args
+    end
+
     test "droid builds args with subcommand and flags" do
       provider = CLIProvider.from_config(:droid)
 
@@ -115,6 +131,20 @@ defmodule LlmCore.LLM.CLIProviderTest do
       args = CLIProvider.build_args(provider, "explain code", [])
 
       assert args == ["explain code"]
+    end
+
+    test "pi_cli builds args with --print and provider/model flags" do
+      provider = CLIProvider.from_config(:pi_cli)
+
+      args =
+        CLIProvider.build_args(provider, "explain this", provider: "anthropic", model: "sonnet")
+
+      assert List.first(args) == "--print"
+      assert "--provider" in args
+      assert "anthropic" in args
+      assert "--model" in args
+      assert "sonnet" in args
+      assert List.last(args) == "explain this"
     end
 
     test "unknown opts are passed through as flags" do
@@ -250,7 +280,9 @@ defmodule LlmCore.LLM.CLIProviderTest do
       }
 
       provider = CLIProvider.from_config(config)
-      assert {:error, %Error{details: %{reason: :not_installed}}} = CLIProvider.send(provider, "test")
+
+      assert {:error, %Error{details: %{reason: :not_installed}}} =
+               CLIProvider.send(provider, "test")
     end
 
     @tag :unix

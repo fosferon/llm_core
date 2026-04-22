@@ -68,6 +68,7 @@ defmodule LlmCore.LLM.CLIProvider do
   |---|---|---|
   | `:claude_code` | `claude` | Wraps with `/bin/sh` for stdin redirect |
   | `:droid` | `droid` | Subcommand `exec`, rich flag set |
+  | `:pi_cli` | `pi` | Pi CLI non-interactive dispatch (`--print`) |
   | `:codex_cli` | `codex` | OpenAI Codex CLI |
   | `:gemini_cli` | `gemini` | Google Gemini CLI |
 
@@ -116,7 +117,17 @@ defmodule LlmCore.LLM.CLIProvider do
       binary: "claude",
       default_timeout: 1_800_000,
       default_model: "claude-code-cli",
-      flags: %{model: "--model"},
+      flags: %{
+        model: "--model",
+        permission_mode: "--permission-mode",
+        dangerously_skip_permissions: "--dangerously-skip-permissions",
+        allow_dangerously_skip_permissions: "--allow-dangerously-skip-permissions",
+        allowed_tools: "--allowed-tools",
+        disallowed_tools: "--disallowed-tools",
+        system_prompt: "--append-system-prompt",
+        system_prompt_file: "--append-system-prompt-file",
+        add_dir: "--add-dir"
+      },
       prompt_position: :flagged,
       prompt_flag: "-p",
       prefix_args: ["--print"],
@@ -142,6 +153,23 @@ defmodule LlmCore.LLM.CLIProvider do
       prompt_position: :last,
       stdin_hack: false,
       install_hint: "Install with: curl -fsSL https://app.factory.ai/cli | sh"
+    },
+    pi_cli: %Config{
+      name: :pi_cli,
+      binary: "pi",
+      default_timeout: 1_800_000,
+      default_model: "pi-cli",
+      flags: %{
+        model: "--model",
+        provider: "--provider",
+        thinking: "--thinking",
+        system_prompt: "--append-system-prompt",
+        system_prompt_file: "--append-system-prompt"
+      },
+      prompt_position: :last,
+      stdin_hack: false,
+      prefix_args: ["--print", "--no-session"],
+      install_hint: "Install pi CLI and ensure `pi` is in PATH"
     },
     codex_cli: %Config{
       name: :codex_cli,
@@ -252,6 +280,8 @@ defmodule LlmCore.LLM.CLIProvider do
       Enum.reduce(cfg.flags, args, fn {opt_key, flag}, acc ->
         case Keyword.get(opts, opt_key) do
           nil -> acc
+          true -> acc ++ [flag]
+          false -> acc
           value -> acc ++ [flag, to_string(value)]
         end
       end)
@@ -352,7 +382,8 @@ defmodule LlmCore.LLM.CLIProvider do
         {:ok, build_response(provider, IO.iodata_to_binary(output), opts)}
 
       {:ok, output, exit_code} ->
-        {:error, build_error(provider, {:exit_code, exit_code}, output: IO.iodata_to_binary(output))}
+        {:error,
+         build_error(provider, {:exit_code, exit_code}, output: IO.iodata_to_binary(output))}
 
       {:error, :timeout} ->
         {:error, build_error(provider, :timeout, opts)}
