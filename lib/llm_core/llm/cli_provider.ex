@@ -168,7 +168,10 @@ defmodule LlmCore.LLM.CLIProvider do
       },
       prompt_position: :last,
       stdin_hack: false,
-      prefix_args: ["--print", "--no-session"],
+      # Disable extension auto-loading for daemon-dispatched runs.
+      # In mixed project/global setups, duplicate tool registrations
+      # can cause Pi startup conflicts and apparent dispatch timeouts.
+      prefix_args: ["--print", "--no-session", "--no-extensions"],
       install_hint: "Install pi CLI and ensure `pi` is in PATH"
     },
     codex_cli: %Config{
