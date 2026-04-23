@@ -2,6 +2,7 @@ defmodule LlmCore.Agent.ToolDispatch.ComponentsTest do
   use ExUnit.Case, async: true
 
   alias LlmCore.Agent.ToolDispatch.Event
+
   alias LlmCore.Agent.ToolDispatch.Components.{
     ResolveStrategy,
     DirectResolve,
@@ -12,6 +13,7 @@ defmodule LlmCore.Agent.ToolDispatch.ComponentsTest do
     CollectResults,
     ComposeOutput
   }
+
   alias LlmToolkit.Tool.Call
 
   # ---------------------------------------------------------------------------

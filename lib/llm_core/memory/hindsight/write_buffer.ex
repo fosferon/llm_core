@@ -226,7 +226,9 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
       Enum.map(items, fn item ->
         %{
           content: item[:content] || item["content"],
-          context: get_in(item, [:metadata, :context]) || get_in(item, ["metadata", "context"]) || "general"
+          context:
+            get_in(item, [:metadata, :context]) || get_in(item, ["metadata", "context"]) ||
+              "general"
         }
       end)
 
@@ -292,8 +294,6 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
       Logger.warning("Failed to persist Hindsight buffer: #{inspect(error)}")
   end
 
-
-
   defp restore_buffer do
     path = buffer_file_path()
 
@@ -316,8 +316,4 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   rescue
     _ -> []
   end
-
-
-
-
 end

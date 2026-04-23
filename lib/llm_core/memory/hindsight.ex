@@ -253,7 +253,12 @@ defmodule LlmCore.Memory.Hindsight do
       |> maybe_put(:max_tokens, max_tokens)
 
     Retry.with_retry(fn ->
-      case rest_post(url, "/v1/default/banks/#{bank_id}/memories/recall", body, config.timeout_recall_ms) do
+      case rest_post(
+             url,
+             "/v1/default/banks/#{bank_id}/memories/recall",
+             body,
+             config.timeout_recall_ms
+           ) do
         {:ok, %{"results" => results}} when is_list(results) -> {:ok, results}
         {:ok, other} -> {:ok, Map.get(other, "results", [])}
         error -> error
@@ -370,6 +375,7 @@ defmodule LlmCore.Memory.Hindsight do
 
   defp build_structured_query(:workflow_effectiveness, opts) do
     workflow = Keyword.get(opts, :workflow, "default")
+
     "What is the effectiveness of the #{workflow} workflow? Include success rate and average duration."
   end
 
@@ -399,7 +405,10 @@ defmodule LlmCore.Memory.Hindsight do
   @doc false
   @spec normalize_budget(atom() | String.t() | nil) :: String.t()
   def normalize_budget(nil), do: "low"
-  def normalize_budget(budget) when is_atom(budget), do: budget |> Atom.to_string() |> String.downcase()
+
+  def normalize_budget(budget) when is_atom(budget),
+    do: budget |> Atom.to_string() |> String.downcase()
+
   def normalize_budget(budget) when is_binary(budget), do: String.downcase(budget)
   def normalize_budget(_), do: "low"
 

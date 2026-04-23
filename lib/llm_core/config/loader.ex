@@ -237,7 +237,14 @@ defmodule LlmCore.Config.Loader do
       options = Map.merge(Map.get(attrs, "options", %{}), Map.get(attrs, "config", %{}))
       metadata = normalize_metadata(attrs)
       auth_defined? = Map.has_key?(attrs, "auth")
-      auth = normalize_auth(Map.get(attrs, "auth", %{}), %{id: id, aliases: aliases, defined?: auth_defined?})
+
+      auth =
+        normalize_auth(Map.get(attrs, "auth", %{}), %{
+          id: id,
+          aliases: aliases,
+          defined?: auth_defined?
+        })
+
       {available?, availability} = evaluate_availability(enabled, mod, auth)
 
       provider = %Definition{

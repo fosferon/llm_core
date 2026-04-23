@@ -90,7 +90,11 @@ defmodule LlmCore.LLM.OpenAI do
     key = resolve_api_key(opts)
 
     if key in [nil, ""] do
-      {:error, Error.new(:authentication, message: "No API key set (OPENAI_API_KEY or opts[:api_key])", provider: :openai)}
+      {:error,
+       Error.new(:authentication,
+         message: "No API key set (OPENAI_API_KEY or opts[:api_key])",
+         provider: :openai
+       )}
     else
       do_send(prompt, opts, key)
     end
@@ -298,7 +302,6 @@ defmodule LlmCore.LLM.OpenAI do
 
       {:stream_done, ^ref} ->
         {:halt, :done}
-
     after
       @default_timeout -> {:halt, :done}
     end

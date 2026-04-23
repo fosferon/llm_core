@@ -24,7 +24,8 @@ if Code.ensure_loaded?(Instructor.Adapter) do
     Routes an Instructor completion request through the llm_core router.
     """
     @impl true
-    @spec chat_completion(keyword(), term()) :: {:ok, term(), String.t()} | {:error, String.t()} | Enumerable.t()
+    @spec chat_completion(keyword(), term()) ::
+            {:ok, term(), String.t()} | {:error, String.t()} | Enumerable.t()
     def chat_completion(params, _config) do
       task_type = Keyword.get(params, :task_type, "default")
       stream? = Keyword.get(params, :stream, false)

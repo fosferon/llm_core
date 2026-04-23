@@ -128,6 +128,7 @@ defmodule LlmCore.Agent do
   def dispatch_provider(%__MODULE__{provider: provider}), do: provider
 
   defp resolve_provider_value(%LlmCore.LLM.CLIProvider{} = p, _config), do: p
+
   defp resolve_provider_value(module, config) when is_atom(module) do
     if module == LlmCore.LLM.CLIProvider or function_exported?(module, :__struct__, 0) do
       build_provider_struct(module, config)
@@ -135,15 +136,18 @@ defmodule LlmCore.Agent do
       nil
     end
   end
+
   defp resolve_provider_value(_, _), do: nil
 
   defp build_provider_struct(LlmCore.LLM.CLIProvider, config) do
     cli_name = config[:cli_provider] || config["cli_provider"]
+
     if cli_name do
       LlmCore.LLM.CLIProvider.from_config(cli_name)
     else
       nil
     end
   end
+
   defp build_provider_struct(_module, _config), do: nil
 end

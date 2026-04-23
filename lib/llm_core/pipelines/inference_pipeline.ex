@@ -49,7 +49,12 @@ defmodule LlmCore.Pipelines.InferencePipeline do
   Normalizes the request, resolves routing, dispatches to the provider, and
   optionally applies structured output extraction.
   """
-  @spec execute(:send | :stream, String.t() | [map()] | map(), String.t() | atom() | nil, keyword()) ::
+  @spec execute(
+          :send | :stream,
+          String.t() | [map()] | map(),
+          String.t() | atom() | nil,
+          keyword()
+        ) ::
           {:ok, term()} | {:error, term()}
   def execute(mode, prompt, task_type, opts \\ []) when mode in [:send, :stream] do
     ensure_started()
@@ -338,6 +343,7 @@ defmodule LlmCore.Pipelines.InferencePipeline do
 
   defp safe_capabilities(agent) do
     provider = Agent.dispatch_provider(agent)
+
     case provider do
       %LlmCore.LLM.CLIProvider{} -> LlmCore.LLM.CLIProvider.capabilities(provider)
       mod when is_atom(mod) -> mod.capabilities()

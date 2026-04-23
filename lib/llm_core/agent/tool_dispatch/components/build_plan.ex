@@ -36,16 +36,14 @@ defmodule LlmCore.Agent.ToolDispatch.Components.BuildPlan do
   def call(%Event{recipe: recipe, call: call} = event, _opts) do
     plan = recipe.(call.arguments)
 
-    %{event |
-      plan: plan,
-      total_parallel: length(Map.get(plan, :parallel, []))
-    }
+    %{event | plan: plan, total_parallel: length(Map.get(plan, :parallel, []))}
   rescue
     e ->
-      %{event |
-        status: :error,
-        error: {:recipe_error, Exception.message(e)},
-        result: "Recipe evaluation error: #{Exception.message(e)}"
+      %{
+        event
+        | status: :error,
+          error: {:recipe_error, Exception.message(e)},
+          result: "Recipe evaluation error: #{Exception.message(e)}"
       }
   end
 end

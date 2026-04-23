@@ -45,7 +45,10 @@ defmodule LlmCore.Config.Watcher do
          }}
 
       :ignore ->
-        Logger.warning("FileSystem watcher unavailable (inotify-tools missing?); config hot-reload disabled")
+        Logger.warning(
+          "FileSystem watcher unavailable (inotify-tools missing?); config hot-reload disabled"
+        )
+
         :ignore
     end
   end

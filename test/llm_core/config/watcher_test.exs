@@ -38,7 +38,9 @@ defmodule LlmCore.Config.WatcherTest do
     watcher_name = Module.concat(__MODULE__, "Instance#{System.unique_integer([:positive])}")
 
     {:ok, watcher_pid} =
-      start_supervised({Watcher, [config_dir: dir, files: [file], debounce_ms: 10, name: watcher_name]})
+      start_supervised(
+        {Watcher, [config_dir: dir, files: [file], debounce_ms: 10, name: watcher_name]}
+      )
 
     File.write!(file, provider_block("demo2"))
     send(watcher_pid, {:file_event, self(), {file, []}})

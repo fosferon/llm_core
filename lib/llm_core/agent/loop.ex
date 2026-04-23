@@ -41,7 +41,8 @@ defmodule LlmCore.Agent.Loop do
 
   @type opts :: [
           {:tools, [LlmToolkit.Tool.t()]}
-          | {:resolve_tool, (LlmToolkit.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
+          | {:resolve_tool,
+             (LlmToolkit.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
           | {:resolver_module, module() | nil}
           | {:max_iterations, pos_integer()}
           | {:on_iteration, (Context.t() -> :ok) | nil}

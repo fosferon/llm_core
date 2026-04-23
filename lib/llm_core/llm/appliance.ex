@@ -356,6 +356,7 @@ defmodule LlmCore.LLM.Appliance do
 
   defp maybe_put_tools(payload, nil), do: payload
   defp maybe_put_tools(payload, []), do: payload
+
   defp maybe_put_tools(payload, tools) when is_list(tools) do
     Map.put(payload, "tools", Codec.encode_definitions(tools, :openai))
   end

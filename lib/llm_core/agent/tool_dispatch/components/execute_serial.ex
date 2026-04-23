@@ -62,11 +62,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ExecuteSerial do
         end
       end)
 
-    %{event |
-      serial_results: results,
-      serial_context: context,
-      errors: event.errors ++ errors
-    }
+    %{event | serial_results: results, serial_context: context, errors: event.errors ++ errors}
   end
 
   # Pass-through when plan has no :serial key
