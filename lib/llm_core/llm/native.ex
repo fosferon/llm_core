@@ -84,6 +84,7 @@ defmodule LlmCore.LLM.Native do
     case result do
       {:ok, llm_response, _messages} ->
         text = llm_response.content || ""
+
         {:ok,
          Response.new(
            content: text,
@@ -122,8 +123,7 @@ defmodule LlmCore.LLM.Native do
 
   defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider) do
     system_prompt = load_agent_prompt(agent_file)
-
-    {provider, resolved_model, provider_opts} = resolve_provider(model, llm_provider)
+    candidates = resolve_candidates(model, llm_provider)
 
     messages = [
       %{role: :system, content: system_prompt},
@@ -131,15 +131,59 @@ defmodule LlmCore.LLM.Native do
     ]
 
     tools = CodeTools.available_tools()
-    llm_send = build_llm_send(provider, resolved_model, provider_opts)
 
-    Loop.run(
-      messages,
-      llm_send,
-      tools: tools,
-      resolve_tool: &CodeTools.resolve(&1, cwd),
-      max_iterations: @max_iterations
-    )
+    run_fn = fn {provider, resolved_model, provider_opts} ->
+      llm_send = build_llm_send(provider, resolved_model, provider_opts)
+
+      Loop.run(
+        messages,
+        llm_send,
+        tools: tools,
+        resolve_tool: &CodeTools.resolve(&1, cwd),
+        max_iterations: @max_iterations
+      )
+    end
+
+    try_cascade(candidates, run_fn)
+  end
+
+  @doc """
+  Walk a list of `{module, model, opts}` candidates and invoke `run_fn`
+  on each until one succeeds.
+
+  - `{:ok, response, messages}` from `run_fn` → returned immediately.
+  - `{:error, :max_iterations_reached}` → returned immediately (reasoning
+    failure, not a provider outage — retrying elsewhere won't help).
+  - Any other `{:error, reason}` → logs and advances to the next candidate.
+  - Empty list → `{:error, :no_provider_succeeded}`.
+
+  Exposed for direct testing; production call sites go through `send/2`.
+  """
+  @spec try_cascade([{module(), String.t(), keyword()}], (tuple() -> term())) ::
+          {:ok, LlmCore.LLM.Response.t(), [map()]} | {:error, term()}
+  def try_cascade([], _run_fn), do: {:error, :no_provider_succeeded}
+
+  def try_cascade([candidate | rest], run_fn) do
+    case run_fn.(candidate) do
+      {:ok, _response, _messages} = ok ->
+        ok
+
+      {:error, :max_iterations_reached} = err ->
+        err
+
+      {:error, _reason} = err when rest == [] ->
+        err
+
+      {:error, reason} ->
+        {mod, _, _} = candidate
+        require Logger
+
+        Logger.warning(
+          "[Native] Provider #{inspect(mod)} failed (#{inspect(reason)}); trying next in cascade"
+        )
+
+        try_cascade(rest, run_fn)
+    end
   end
 
   # ── Agent Prompt ───────────────────────────────────────────
@@ -177,49 +221,39 @@ defmodule LlmCore.LLM.Native do
   #
   # All of this is configurable — change the TOML, not the code.
 
-  defp resolve_provider(model, llm_provider) when is_binary(model) do
-    config = read_native_config()
+  # Returns an ordered list of `{mod, model, opts}` candidates.
+  #
+  # Explicit `llm_provider` → single-element list (caller asked for a specific
+  # backend; don't silently cascade to a different one).
+  # Otherwise → primary + remaining cascade fallbacks from `Router.candidates/3`.
+  defp resolve_candidates(model, llm_provider) when is_binary(llm_provider) do
+    case Router.resolve_provider(llm_provider) do
+      {:ok, {mod, resolved_model, opts}} ->
+        [{mod, model || resolved_model, opts}]
 
-    if llm_provider do
-      case Router.resolve_provider(llm_provider) do
-        {:ok, {mod, resolved_model, opts}} ->
-          {mod, model || resolved_model, opts}
-
-        {:error, :no_provider} ->
-          raise "unknown LLM provider: #{llm_provider}"
-      end
-    else
-      appliance_has = appliance_available?() and model_available_on_appliance?(model)
-
-      case Router.resolve(model, config, appliance_has_model: appliance_has) do
-        {:ok, result} -> result
-        {:error, :no_provider} ->
-          raise "no LLM API provider available — check [native] cascade in llm_core.toml"
-      end
+      {:error, :no_provider} ->
+        raise "unknown LLM provider: #{llm_provider}"
     end
   end
 
-  defp resolve_provider(nil, llm_provider) do
+  defp resolve_candidates(model, nil) do
     config = read_native_config()
 
-    if llm_provider do
-      case Router.resolve_provider(llm_provider) do
-        {:ok, result} -> result
-        {:error, :no_provider} ->
-          raise "unknown LLM provider: #{llm_provider}"
-      end
-    else
-      case Router.resolve(nil, config) do
-        {:ok, result} -> result
-        {:error, :no_provider} ->
-          raise "no LLM API provider available — check [native] cascade in llm_core.toml"
-      end
+    appliance_has =
+      is_binary(model) and appliance_available?() and model_available_on_appliance?(model)
+
+    case Router.candidates(model, config, appliance_has_model: appliance_has) do
+      [] ->
+        raise "no LLM API provider available — check [native] cascade in llm_core.toml"
+
+      candidates ->
+        candidates
     end
   end
 
   # Read [native] config from Application env (loaded from TOML at startup).
   defp read_native_config do
-        Application.get_env(:llm_core, :native, default_native_config())
+    Application.get_env(:llm_core, :native, default_native_config())
   end
 
   defp default_native_config do

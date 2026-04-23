@@ -78,6 +78,47 @@ defmodule LlmCore.LLM.Native.Router do
     lookup_provider(provider_name, nil, providers)
   end
 
+  @doc """
+  Returns an ordered list of candidates — primary first, then cascade fallbacks.
+
+  The primary is what `resolve/3` would pick. Fallbacks are the remaining
+  cascade providers with their own default models (NOT the originally requested
+  model — a claude-named model can't run on Appliance).
+
+  The primary module is never duplicated in the tail. Callers walk the list
+  and attempt each candidate in order, falling through on runtime failure.
+
+  Returns `[]` when nothing resolves.
+  """
+  @spec candidates(String.t() | nil, config(), keyword()) :: [
+          {module(), String.t(), provider_opts()}
+        ]
+  def candidates(model, config, opts \\ []) do
+    case resolve(model, config, opts) do
+      {:error, :no_provider} ->
+        []
+
+      {:ok, primary} ->
+        [primary | fallback_candidates(primary, config)]
+    end
+  end
+
+  defp fallback_candidates({primary_mod, _, _}, config) do
+    providers = fetch_providers()
+    cascade = Map.get(config, :cascade, [])
+
+    cascade
+    |> Enum.reduce([], fn alias, acc ->
+      case lookup_provider(alias, nil, providers) do
+        {:ok, {^primary_mod, _, _}} -> acc
+        {:ok, candidate} -> [candidate | acc]
+        {:error, _} -> acc
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.uniq_by(fn {mod, _, _} -> mod end)
+  end
+
   # ── Model Routing ─────────────────────────────────────────
 
   @doc "Match a lowercased model string against routing patterns. First match wins."
