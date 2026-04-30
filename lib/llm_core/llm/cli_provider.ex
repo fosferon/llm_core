@@ -20,6 +20,15 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `prefix_args` — args always prepended (e.g. `["--print"]` for claude)
     * `stdin_hack` — wrap with `/bin/sh -c 'exec "$0" "$@" < /dev/null'` (claude needs this)
     * `install_hint` — shown in not_installed error message
+    * `prompt_transport` — optional semantic prompt transport (`:last`, `:flagged`, `:stdin`)
+    * `system_prompt_transport` — optional semantic system prompt strategy
+    * `cwd_flag` — optional explicit cwd flag for capability introspection
+    * `add_dir_flag` — optional explicit add-dir flag for capability introspection
+    * `output_mode` — optional output mode (`:stdout_text`, `:final_message_only`, `:json`)
+    * `non_interactive_args` — optional args enabling non-interactive execution
+    * `auto_approve_args` — optional args enabling unattended execution
+    * `sandbox_bypass_args` — optional args for stronger sandbox/approval bypass
+    * `preflight` — optional declarative preflight configuration
   """
 
   @type t :: %__MODULE__{
@@ -34,7 +43,16 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           prompt_flag: String.t() | nil,
           prefix_args: [String.t()],
           stdin_hack: boolean(),
-          install_hint: String.t() | nil
+          install_hint: String.t() | nil,
+          prompt_transport: :last | :flagged | :stdin | nil,
+          system_prompt_transport: :flag | :file_flag | :inline_fallback | :unsupported | nil,
+          cwd_flag: String.t() | nil,
+          add_dir_flag: String.t() | nil,
+          output_mode: :stdout_text | :final_message_only | :json | nil,
+          non_interactive_args: [String.t()],
+          auto_approve_args: [String.t()],
+          sandbox_bypass_args: [String.t()],
+          preflight: map()
         }
 
   @enforce_keys [:name, :binary]
@@ -44,13 +62,22 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     :subcommand,
     :prompt_flag,
     :install_hint,
+    :prompt_transport,
+    :system_prompt_transport,
+    :cwd_flag,
+    :add_dir_flag,
+    :output_mode,
     provider_type: :cli,
     default_timeout: 1_800_000,
     default_model: "cli-default",
     flags: %{},
     prompt_position: :last,
     prefix_args: [],
-    stdin_hack: false
+    stdin_hack: false,
+    non_interactive_args: [],
+    auto_approve_args: [],
+    sandbox_bypass_args: [],
+    preflight: %{}
   ]
 end
 
@@ -69,6 +96,7 @@ defmodule LlmCore.LLM.CLIProvider do
   | `:claude_code` | `claude` | Wraps with `/bin/sh` for stdin redirect |
   | `:droid` | `droid` | Subcommand `exec`, rich flag set |
   | `:pi_cli` | `pi` | Pi CLI non-interactive dispatch (`--print`) |
+  | `:kimi_cli` | `kimi-cli` | Kimi CLI with agent-file support |
   | `:codex_cli` | `codex` | OpenAI Codex CLI |
   | `:gemini_cli` | `gemini` | Google Gemini CLI |
 
@@ -132,6 +160,11 @@ defmodule LlmCore.LLM.CLIProvider do
       prompt_flag: "-p",
       prefix_args: ["--print"],
       stdin_hack: true,
+      prompt_transport: :flagged,
+      system_prompt_transport: :file_flag,
+      add_dir_flag: "--add-dir",
+      output_mode: :stdout_text,
+      preflight: %{help_args: ["--help"], expect_in_help: ["--print", "--model"]},
       install_hint: "Install with: npm install -g @anthropic/claude-code"
     },
     droid: %Config{
@@ -151,7 +184,13 @@ defmodule LlmCore.LLM.CLIProvider do
         disabled_tools: "--disabled-tools"
       },
       prompt_position: :last,
+      prompt_transport: :last,
+      system_prompt_transport: :file_flag,
+      cwd_flag: "--cwd",
       stdin_hack: false,
+      output_mode: :stdout_text,
+      auto_approve_args: ["--auto", "high"],
+      preflight: %{help_args: ["exec", "--help"], expect_in_help: ["--auto", "--cwd"]},
       install_hint: "Install with: curl -fsSL https://app.factory.ai/cli | sh"
     },
     pi_cli: %Config{
@@ -167,21 +206,64 @@ defmodule LlmCore.LLM.CLIProvider do
         system_prompt_file: "--append-system-prompt"
       },
       prompt_position: :last,
-      stdin_hack: false,
+      prompt_transport: :last,
+      system_prompt_transport: :file_flag,
+      stdin_hack: true,
       # Disable extension auto-loading for daemon-dispatched runs.
       # In mixed project/global setups, duplicate tool registrations
       # can cause Pi startup conflicts and apparent dispatch timeouts.
       prefix_args: ["--print", "--no-session", "--no-extensions"],
+      output_mode: :stdout_text,
+      preflight: %{help_args: ["--help"], expect_in_help: ["--print", "--model"]},
       install_hint: "Install pi CLI and ensure `pi` is in PATH"
+    },
+    kimi_cli: %Config{
+      name: :kimi_cli,
+      binary: "kimi-cli",
+      default_timeout: 1_800_000,
+      default_model: "kimi-cli",
+      flags: %{
+        model: "--model",
+        cwd: "--work-dir",
+        add_dir: "--add-dir",
+        system_prompt_file: "--agent-file"
+      },
+      prompt_position: :flagged,
+      prompt_flag: "--prompt",
+      prompt_transport: :flagged,
+      system_prompt_transport: :file_flag,
+      cwd_flag: "--work-dir",
+      add_dir_flag: "--add-dir",
+      prefix_args: ["--print", "--output-format", "text", "--final-message-only"],
+      output_mode: :final_message_only,
+      auto_approve_args: ["--yolo"],
+      preflight: %{
+        help_args: ["--help"],
+        expect_in_help: ["--agent-file", "--print", "--work-dir"]
+      },
+      install_hint: "Install Kimi CLI and ensure `kimi-cli` is in PATH"
     },
     codex_cli: %Config{
       name: :codex_cli,
       binary: "codex",
+      subcommand: "exec",
       default_timeout: 1_800_000,
       default_model: "codex-cli",
-      flags: %{model: "--model"},
+      flags: %{
+        model: "--model",
+        cwd: "--cd",
+        add_dir: "--add-dir"
+      },
       prompt_position: :last,
+      prompt_transport: :last,
+      system_prompt_transport: :inline_fallback,
+      cwd_flag: "--cd",
+      add_dir_flag: "--add-dir",
+      output_mode: :stdout_text,
       stdin_hack: false,
+      auto_approve_args: ["--full-auto"],
+      sandbox_bypass_args: ["--dangerously-bypass-approvals-and-sandbox"],
+      preflight: %{help_args: ["exec", "--help"], expect_in_help: ["--full-auto", "--add-dir"]},
       install_hint: "Install with: npm install -g @openai/codex"
     },
     gemini_cli: %Config{
@@ -191,7 +273,10 @@ defmodule LlmCore.LLM.CLIProvider do
       default_model: "gemini-cli",
       flags: %{model: "--model"},
       prompt_position: :last,
+      prompt_transport: :last,
       stdin_hack: false,
+      output_mode: :stdout_text,
+      preflight: %{help_args: ["--help"]},
       install_hint: "Install the Google Cloud CLI with Gemini support"
     }
   }
@@ -230,8 +315,49 @@ defmodule LlmCore.LLM.CLIProvider do
   end
 
   @spec capabilities(t()) :: map()
-  def capabilities(%__MODULE__{}) do
-    %{streaming: true, passthrough: true}
+  def capabilities(%__MODULE__{config: cfg}) do
+    %{
+      streaming: true,
+      passthrough: true,
+      dispatch_mode: ["non_interactive"],
+      prompting: %{
+        system_prompt: has_flag?(cfg, :system_prompt),
+        system_prompt_file: has_flag?(cfg, :system_prompt_file),
+        inline_fallback: effective_system_prompt_transport(cfg) == :inline_fallback
+      },
+      workspace: %{
+        cwd: has_flag?(cfg, :cwd) or is_binary(cfg.cwd_flag),
+        add_dir: has_flag?(cfg, :add_dir) or is_binary(cfg.add_dir_flag)
+      },
+      automation: %{
+        auto_approve: cfg.auto_approve_args != [],
+        sandbox_bypass: cfg.sandbox_bypass_args != []
+      },
+      output: %{mode: effective_output_mode(cfg)},
+      persona: %{
+        native_file: has_flag?(cfg, :system_prompt_file),
+        inline_fallback: effective_system_prompt_transport(cfg) == :inline_fallback
+      },
+      detached_stdin: cfg.stdin_hack
+    }
+  end
+
+  @doc "Returns whether the provider supports a semantic capability."
+  @spec supports?(t(), atom()) :: boolean()
+  def supports?(provider, capability) do
+    caps = capabilities(provider)
+
+    case capability do
+      :cwd -> get_in(caps, [:workspace, :cwd]) == true
+      :add_dir -> get_in(caps, [:workspace, :add_dir]) == true
+      :system_prompt -> get_in(caps, [:prompting, :system_prompt]) == true
+      :system_prompt_file -> get_in(caps, [:prompting, :system_prompt_file]) == true
+      :inline_fallback -> get_in(caps, [:prompting, :inline_fallback]) == true
+      :auto_approve -> get_in(caps, [:automation, :auto_approve]) == true
+      :sandbox_bypass -> get_in(caps, [:automation, :sandbox_bypass]) == true
+      :detached_stdin -> Map.get(caps, :detached_stdin) == true
+      _ -> false
+    end
   end
 
   @spec provider_type(t()) :: :cli
@@ -255,26 +381,97 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
+  @doc """
+  Returns a normalized invocation plan describing how the provider will run.
+  """
+  @spec invocation_plan(t(), String.t(), keyword()) :: map()
+  def invocation_plan(%__MODULE__{config: cfg} = provider, prompt, opts \\ []) do
+    {rendered_prompt, rendered_opts, render_meta} =
+      prepare_prompt_and_opts(provider, prompt, opts)
+
+    cli_args = do_build_args(cfg, rendered_prompt, rendered_opts)
+    {executable, invocation_args} = build_invocation_from_args(cfg, cli_args)
+
+    %{
+      executable: executable,
+      args: invocation_args,
+      prompt: rendered_prompt,
+      prompt_transport: effective_prompt_transport(cfg),
+      system_prompt_transport: render_meta.system_prompt_transport,
+      persona_strategy: render_meta.persona_strategy,
+      output_mode: effective_output_mode(cfg),
+      stdin_detached: cfg.stdin_hack
+    }
+  end
+
+  @doc """
+  Renders a prompt after applying any declared inline system-prompt fallback.
+  """
+  @spec render_prompt(t(), String.t(), keyword()) :: String.t()
+  def render_prompt(provider, prompt, opts \\ []) do
+    {rendered_prompt, _opts, _meta} = prepare_prompt_and_opts(provider, prompt, opts)
+    rendered_prompt
+  end
+
+  @doc """
+  Runs declarative checks proving the CLI surface matches the configured contract.
+  """
+  @spec preflight(t()) :: {:ok, map()} | {:error, map()}
+  def preflight(%__MODULE__{config: cfg} = provider) do
+    if not available?(provider) do
+      {:error, %{reason: :not_installed, binary: cfg.binary}}
+    else
+      executable = System.find_executable(cfg.binary) || cfg.binary
+      checks = []
+
+      with {:ok, checks} <- maybe_run_help_check(executable, cfg, checks),
+           {:ok, checks} <- maybe_run_version_check(executable, cfg, checks) do
+        {:ok,
+         %{binary: executable, checks: Enum.reverse(checks), capabilities: capabilities(provider)}}
+      end
+    end
+  end
+
   # ── Arg Building (public for testing) ─────────────────────
 
   @doc "Builds the CLI argument list from prompt and opts."
   @spec build_args(t(), String.t(), keyword()) :: [String.t()]
-  def build_args(%__MODULE__{config: cfg}, prompt, opts) do
-    args = []
+  def build_args(%__MODULE__{config: cfg} = provider, prompt, opts) do
+    {rendered_prompt, rendered_opts, _meta} = prepare_prompt_and_opts(provider, prompt, opts)
+    do_build_args(cfg, rendered_prompt, rendered_opts)
+  end
 
+  defp do_build_args(cfg, prompt, opts) do
+    args = []
     # Subcommand (e.g. "exec" for droid)
     args = if cfg.subcommand, do: args ++ [cfg.subcommand], else: args
 
     # Prefix args (e.g. ["--print"] for claude)
     args = args ++ cfg.prefix_args
 
+    args =
+      maybe_append_profile_args(
+        args,
+        cfg.non_interactive_args,
+        Keyword.get(opts, :non_interactive)
+      )
+
+    args =
+      maybe_append_profile_args(args, cfg.auto_approve_args, Keyword.get(opts, :auto_approve))
+
+    args =
+      maybe_append_profile_args(args, cfg.sandbox_bypass_args, Keyword.get(opts, :sandbox_bypass))
+
     # Prompt (placed before mapped flags for :flagged, after for :last)
     args =
-      case cfg.prompt_position do
+      case effective_prompt_transport(cfg) do
         :flagged ->
           args ++ [cfg.prompt_flag, prompt]
 
         :last ->
+          args
+
+        :stdin ->
           args
       end
 
@@ -291,9 +488,10 @@ defmodule LlmCore.LLM.CLIProvider do
 
     # Prompt at end for :last position
     args =
-      case cfg.prompt_position do
+      case effective_prompt_transport(cfg) do
         :last -> args ++ [prompt]
         :flagged -> args
+        :stdin -> args
       end
 
     args
@@ -304,14 +502,9 @@ defmodule LlmCore.LLM.CLIProvider do
   @doc "Returns {executable, args} for the CLI invocation."
   @spec build_invocation(t(), String.t(), keyword()) :: {String.t(), [String.t()]}
   def build_invocation(%__MODULE__{config: cfg} = provider, prompt, opts) do
-    cli_args = build_args(provider, prompt, opts)
-
-    if cfg.stdin_hack do
-      binary_path = System.find_executable(cfg.binary) || cfg.binary
-      {"/bin/sh", ["-c", ~s|exec "$0" "$@" < /dev/null|, binary_path | cli_args]}
-    else
-      {cfg.binary, cli_args}
-    end
+    {rendered_prompt, rendered_opts, _meta} = prepare_prompt_and_opts(provider, prompt, opts)
+    cli_args = do_build_args(cfg, rendered_prompt, rendered_opts)
+    build_invocation_from_args(cfg, cli_args)
   end
 
   # ── Response/Error Building (public for testing) ──────────
@@ -415,6 +608,144 @@ defmodule LlmCore.LLM.CLIProvider do
         {:error, build_error(provider, {:exec_error, err}, opts)}
     end
   end
+
+  defp build_invocation_from_args(cfg, cli_args) do
+    if cfg.stdin_hack do
+      binary_path = System.find_executable(cfg.binary) || cfg.binary
+      {"/bin/sh", ["-c", ~s|exec "$0" "$@" < /dev/null|, binary_path | cli_args]}
+    else
+      {cfg.binary, cli_args}
+    end
+  end
+
+  defp prepare_prompt_and_opts(%__MODULE__{config: cfg}, prompt, opts) do
+    system_prompt_text = system_prompt_text(opts)
+    transport = effective_system_prompt_transport(cfg)
+
+    cond do
+      transport == :inline_fallback and is_binary(system_prompt_text) and system_prompt_text != "" ->
+        {
+          inline_system_prompt(system_prompt_text, prompt),
+          opts |> Keyword.delete(:system_prompt) |> Keyword.delete(:system_prompt_file),
+          %{system_prompt_transport: :inline_fallback, persona_strategy: :inline_fallback}
+        }
+
+      has_flag?(cfg, :system_prompt_file) and Keyword.has_key?(opts, :system_prompt_file) ->
+        {prompt, opts, %{system_prompt_transport: :file_flag, persona_strategy: :native_file}}
+
+      has_flag?(cfg, :system_prompt) and Keyword.has_key?(opts, :system_prompt) ->
+        {prompt, opts, %{system_prompt_transport: :flag, persona_strategy: :native_text}}
+
+      true ->
+        {prompt, opts, %{system_prompt_transport: transport, persona_strategy: :none}}
+    end
+  end
+
+  defp system_prompt_text(opts) do
+    cond do
+      is_binary(opts[:system_prompt]) and opts[:system_prompt] != "" ->
+        opts[:system_prompt]
+
+      is_binary(opts[:system_prompt_file]) and opts[:system_prompt_file] != "" ->
+        case File.read(opts[:system_prompt_file]) do
+          {:ok, contents} -> contents
+          _ -> nil
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  defp inline_system_prompt(system_prompt, prompt) do
+    String.trim("""
+    System instructions:
+    #{String.trim(system_prompt)}
+
+    User request:
+    #{prompt}
+    """)
+  end
+
+  defp effective_prompt_transport(%Config{prompt_transport: transport})
+       when transport in [:last, :flagged, :stdin],
+       do: transport
+
+  defp effective_prompt_transport(%Config{prompt_position: position}), do: position
+
+  defp effective_system_prompt_transport(%Config{system_prompt_transport: transport})
+       when transport in [:flag, :file_flag, :inline_fallback, :unsupported],
+       do: transport
+
+  defp effective_system_prompt_transport(%Config{} = cfg) do
+    cond do
+      has_flag?(cfg, :system_prompt_file) -> :file_flag
+      has_flag?(cfg, :system_prompt) -> :flag
+      true -> :unsupported
+    end
+  end
+
+  defp effective_output_mode(%Config{output_mode: mode})
+       when mode in [:stdout_text, :final_message_only, :json],
+       do: mode
+
+  defp effective_output_mode(%Config{}), do: :stdout_text
+
+  defp has_flag?(%Config{flags: flags}, key), do: is_binary(Map.get(flags, key))
+
+  defp maybe_append_profile_args(args, profile_args, true) when is_list(profile_args),
+    do: args ++ profile_args
+
+  defp maybe_append_profile_args(args, _profile_args, _enabled), do: args
+
+  defp maybe_run_help_check(executable, %Config{preflight: %{help_args: help_args}} = cfg, checks)
+       when is_list(help_args) do
+    expect = Map.get(cfg.preflight, :expect_in_help, Map.get(cfg.preflight, "expect_in_help", []))
+
+    case System.cmd(executable, help_args, stderr_to_stdout: true) do
+      {output, 0} ->
+        missing = Enum.reject(expect, &String.contains?(output, &1))
+
+        if missing == [] do
+          {:ok, [%{check: :help, ok: true, args: help_args} | checks]}
+        else
+          {:error,
+           %{reason: :preflight_failed, failed_check: :help, missing: missing, output: output}}
+        end
+
+      {output, status} ->
+        {:error,
+         %{reason: :preflight_failed, failed_check: :help, exit_status: status, output: output}}
+    end
+  rescue
+    error ->
+      {:error,
+       %{reason: :preflight_failed, failed_check: :help, details: Exception.message(error)}}
+  end
+
+  defp maybe_run_help_check(_executable, _cfg, checks), do: {:ok, checks}
+
+  defp maybe_run_version_check(
+         executable,
+         %Config{preflight: %{version_args: version_args}},
+         checks
+       )
+       when is_list(version_args) do
+    case System.cmd(executable, version_args, stderr_to_stdout: true) do
+      {_output, 0} ->
+        {:ok, [%{check: :version, ok: true, args: version_args} | checks]}
+
+      {output, status} ->
+        {:error,
+         %{reason: :preflight_failed, failed_check: :version, exit_status: status, output: output}}
+    end
+  rescue
+    error ->
+      {:error,
+       %{reason: :preflight_failed, failed_check: :version, details: Exception.message(error)}}
+  end
+
+  defp maybe_run_version_check(_executable, _cfg, checks), do: {:ok, checks}
 
   # ── Port Helpers ──────────────────────────────────────────
   #

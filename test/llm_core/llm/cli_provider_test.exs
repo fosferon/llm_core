@@ -19,6 +19,13 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert config.subcommand == "exec"
     end
 
+    test "loads built-in kimi config" do
+      assert {:ok, config} = CLIProvider.config(:kimi_cli)
+      assert config.binary == "kimi-cli"
+      assert config.prompt_flag == "--prompt"
+      assert config.system_prompt_transport == :file_flag
+    end
+
     test "returns error for unknown provider" do
       assert {:error, _} = CLIProvider.config(:nonexistent_cli)
     end
@@ -56,12 +63,38 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert Map.has_key?(caps, :streaming)
       assert Map.has_key?(caps, :passthrough)
     end
+
+    test "returns richer dispatch-aware capability data" do
+      provider = CLIProvider.from_config(:codex_cli)
+      caps = CLIProvider.capabilities(provider)
+
+      assert get_in(caps, [:workspace, :cwd]) == true
+      assert get_in(caps, [:workspace, :add_dir]) == true
+      assert get_in(caps, [:automation, :auto_approve]) == true
+      assert get_in(caps, [:prompting, :inline_fallback]) == true
+      assert get_in(caps, [:persona, :native_file]) == false
+    end
   end
 
   describe "provider_type/1" do
     test "returns :cli" do
       provider = CLIProvider.from_config(:claude_code)
       assert CLIProvider.provider_type(provider) == :cli
+    end
+  end
+
+  describe "supports?/2" do
+    test "reports semantic provider support" do
+      codex = CLIProvider.from_config(:codex_cli)
+      kimi = CLIProvider.from_config(:kimi_cli)
+
+      assert CLIProvider.supports?(codex, :cwd)
+      assert CLIProvider.supports?(codex, :auto_approve)
+      assert CLIProvider.supports?(codex, :inline_fallback)
+      refute CLIProvider.supports?(codex, :system_prompt_file)
+
+      assert CLIProvider.supports?(kimi, :system_prompt_file)
+      refute CLIProvider.supports?(kimi, :inline_fallback)
     end
   end
 
@@ -119,11 +152,16 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert List.last(args) == "fix the bug"
     end
 
-    test "codex_cli builds args" do
+    test "codex_cli builds args with exec subcommand and workspace flags" do
       provider = CLIProvider.from_config(:codex_cli)
-      args = CLIProvider.build_args(provider, "write tests", model: "codex-1")
+      args = CLIProvider.build_args(provider, "write tests", model: "codex-1", cwd: "/tmp")
 
-      assert args == ["--model", "codex-1", "write tests"]
+      assert List.first(args) == "exec"
+      assert "--model" in args
+      assert "codex-1" in args
+      assert "--cd" in args
+      assert "/tmp" in args
+      assert List.last(args) == "write tests"
     end
 
     test "gemini_cli builds args" do
@@ -145,6 +183,38 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert "--model" in args
       assert "sonnet" in args
       assert List.last(args) == "explain this"
+    end
+
+    test "kimi_cli builds args with non-interactive prefix and agent file flag" do
+      provider = CLIProvider.from_config(:kimi_cli)
+
+      args =
+        CLIProvider.build_args(provider, "explain this",
+          model: "k2",
+          system_prompt_file: "/tmp/agent.md",
+          cwd: "/project"
+        )
+
+      assert Enum.take(args, 4) == ["--print", "--output-format", "text", "--final-message-only"]
+      assert "--prompt" in args
+      assert "--agent-file" in args
+      assert "/tmp/agent.md" in args
+      assert "--work-dir" in args
+      assert "/project" in args
+      assert "--model" in args
+      assert "k2" in args
+    end
+
+    test "semantic auto_approve appends provider-specific unattended args" do
+      droid = CLIProvider.from_config(:droid)
+      codex = CLIProvider.from_config(:codex_cli)
+
+      droid_args = CLIProvider.build_args(droid, "ship it", auto_approve: true)
+      codex_args = CLIProvider.build_args(codex, "ship it", auto_approve: true)
+
+      assert "--auto" in droid_args
+      assert "high" in droid_args
+      assert "--full-auto" in codex_args
     end
 
     test "unknown opts are passed through as flags" do
@@ -186,6 +256,51 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       assert exec == "droid" or String.contains?(exec, "droid")
       refute List.first(args) == "-c"
+    end
+
+    test "pi_cli now wraps with sh for detached stdin" do
+      provider = CLIProvider.from_config(:pi_cli)
+      {exec, args} = CLIProvider.build_invocation(provider, "hello", [])
+
+      assert exec == "/bin/sh"
+      assert List.first(args) == "-c"
+    end
+  end
+
+  describe "invocation_plan/3" do
+    test "summarizes codex invocation and inline persona strategy" do
+      provider = CLIProvider.from_config(:codex_cli)
+
+      plan =
+        CLIProvider.invocation_plan(provider, "write code",
+          model: "codex-1",
+          system_prompt: "You are precise."
+        )
+
+      assert plan.executable == "codex"
+      assert plan.prompt_transport == :last
+      assert plan.system_prompt_transport == :inline_fallback
+      assert plan.persona_strategy == :inline_fallback
+      assert plan.stdin_detached == false
+    end
+  end
+
+  describe "render_prompt/3" do
+    test "uses inline fallback for codex when given system_prompt text" do
+      provider = CLIProvider.from_config(:codex_cli)
+      prompt = CLIProvider.render_prompt(provider, "Write tests", system_prompt: "Be concise.")
+
+      assert prompt =~ "System instructions:"
+      assert prompt =~ "Be concise."
+      assert prompt =~ "User request:"
+      assert prompt =~ "Write tests"
+    end
+
+    test "uses native file transport for kimi without rewriting prompt" do
+      provider = CLIProvider.from_config(:kimi_cli)
+      prompt = CLIProvider.render_prompt(provider, "Write tests", system_prompt: "Be concise.")
+
+      assert prompt == "Write tests"
     end
   end
 
@@ -264,6 +379,57 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert config.flags == %{}
       assert config.stdin_hack == false
       assert config.subcommand == nil
+      assert config.non_interactive_args == []
+      assert config.auto_approve_args == []
+      assert config.preflight == %{}
+    end
+  end
+
+  describe "preflight/1" do
+    test "returns not_installed for missing binary" do
+      provider =
+        CLIProvider.from_config(%CLIProvider.Config{
+          name: :missing,
+          binary: "no_such_binary_xyz",
+          provider_type: :cli,
+          default_timeout: 1_000,
+          default_model: "v1"
+        })
+
+      assert {:error, %{reason: :not_installed}} = CLIProvider.preflight(provider)
+    end
+
+    test "passes declarative help checks" do
+      provider =
+        CLIProvider.from_config(%CLIProvider.Config{
+          name: :shell_test,
+          binary: "/bin/sh",
+          provider_type: :cli,
+          default_timeout: 1_000,
+          default_model: "v1",
+          preflight: %{
+            help_args: ["-c", "printf '%s' '--flag --mode'"],
+            expect_in_help: ["--flag"]
+          }
+        })
+
+      assert {:ok, %{checks: checks}} = CLIProvider.preflight(provider)
+      assert Enum.any?(checks, &(&1.check == :help and &1.ok == true))
+    end
+
+    test "fails when required help surface is missing" do
+      provider =
+        CLIProvider.from_config(%CLIProvider.Config{
+          name: :shell_test,
+          binary: "/bin/sh",
+          provider_type: :cli,
+          default_timeout: 1_000,
+          default_model: "v1",
+          preflight: %{help_args: ["-c", "printf '%s' '--mode'"], expect_in_help: ["--flag"]}
+        })
+
+      assert {:error, %{reason: :preflight_failed, failed_check: :help, missing: ["--flag"]}} =
+               CLIProvider.preflight(provider)
     end
   end
 
