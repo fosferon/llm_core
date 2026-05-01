@@ -205,7 +205,13 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
   def execute_operation(%Context{result: result} = ctx, _opts) when not is_nil(result), do: ctx
 
   def execute_operation(%Context{operation: :retain_async, payload: payload} = ctx, _opts) do
-    WriteBuffer.buffer(payload.content, payload.metadata, bank_id: Map.get(payload, :bank_id))
+    opts = Map.get(payload, :opts, [])
+    api_key = Keyword.get(opts, :api_key)
+
+    buffer_opts = [bank_id: Map.get(payload, :bank_id)]
+    buffer_opts = if api_key, do: [{:api_key, api_key} | buffer_opts], else: buffer_opts
+
+    WriteBuffer.buffer(payload.content, payload.metadata, buffer_opts)
     %{ctx | result: :ok}
   end
 

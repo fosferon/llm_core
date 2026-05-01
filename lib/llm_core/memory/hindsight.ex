@@ -152,8 +152,9 @@ defmodule LlmCore.Memory.Hindsight do
     with {:ok, url} <- require_enabled_url() do
       config = Config.effective_config()
       timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
+      api_key = Keyword.get(opts, :api_key)
 
-      case rest_get(url, "/v1/default/banks", timeout) do
+      case rest_get(url, "/v1/default/banks", timeout, api_key: api_key) do
         {:ok, %{"banks" => banks}} -> {:ok, banks}
         {:ok, other} -> {:ok, List.wrap(other["banks"] || [])}
         error -> error
@@ -176,12 +177,13 @@ defmodule LlmCore.Memory.Hindsight do
       with {:ok, url} <- require_enabled_url() do
         config = Config.effective_config()
         timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
+        api_key = Keyword.get(opts, :api_key)
 
         body =
           %{name: Keyword.get(opts, :name, trimmed)}
           |> maybe_put(:mission, Keyword.get(opts, :mission))
 
-        case rest_put(url, "/v1/default/banks/#{trimmed}", body, timeout) do
+        case rest_put(url, "/v1/default/banks/#{trimmed}", body, timeout, api_key: api_key) do
           {:ok, result} -> {:ok, result}
           error -> error
         end
@@ -199,8 +201,9 @@ defmodule LlmCore.Memory.Hindsight do
     with {:ok, url} <- require_enabled_url() do
       config = Config.effective_config()
       timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
+      api_key = Keyword.get(opts, :api_key)
 
-      case rest_delete(url, "/v1/default/banks/#{bank_id}", timeout) do
+      case rest_delete(url, "/v1/default/banks/#{bank_id}", timeout, api_key: api_key) do
         {:ok, _} -> :ok
         {:error, {:http_error, 204, _}} -> :ok
         error -> error
@@ -216,8 +219,9 @@ defmodule LlmCore.Memory.Hindsight do
     with {:ok, url} <- require_enabled_url() do
       config = Config.effective_config()
       timeout = Keyword.get(opts, :timeout, config.timeout_recall_ms)
+      api_key = Keyword.get(opts, :api_key)
 
-      rest_get(url, "/v1/default/banks/#{bank_id}/stats", timeout)
+      rest_get(url, "/v1/default/banks/#{bank_id}/stats", timeout, api_key: api_key)
     end
   end
 
@@ -229,6 +233,7 @@ defmodule LlmCore.Memory.Hindsight do
     config = Config.effective_config()
     bank_id = resolve_bank_id(opts)
     context = Keyword.get(opts, :context) || metadata[:context] || "general"
+    api_key = Keyword.get(opts, :api_key)
 
     body = %{
       items: [%{content: content, context: context}],
@@ -236,7 +241,7 @@ defmodule LlmCore.Memory.Hindsight do
     }
 
     Retry.with_retry(fn ->
-      rest_post(url, "/v1/default/banks/#{bank_id}/memories", body, config.timeout_retain_ms)
+      rest_post(url, "/v1/default/banks/#{bank_id}/memories", body, config.timeout_retain_ms, api_key: api_key)
     end)
   end
 
@@ -247,6 +252,7 @@ defmodule LlmCore.Memory.Hindsight do
     bank_id = resolve_bank_id(opts)
     max_tokens = Keyword.get(opts, :max_tokens, 4_096)
     budget = normalize_budget(Keyword.get(opts, :budget, :low))
+    api_key = Keyword.get(opts, :api_key)
 
     body =
       %{query: query, budget: budget}
@@ -257,7 +263,8 @@ defmodule LlmCore.Memory.Hindsight do
              url,
              "/v1/default/banks/#{bank_id}/memories/recall",
              body,
-             config.timeout_recall_ms
+             config.timeout_recall_ms,
+             api_key: api_key
            ) do
         {:ok, %{"results" => results}} when is_list(results) -> {:ok, results}
         {:ok, other} -> {:ok, Map.get(other, "results", [])}
@@ -272,11 +279,12 @@ defmodule LlmCore.Memory.Hindsight do
     config = Config.effective_config()
     bank_id = resolve_bank_id(opts)
     budget = normalize_budget(Keyword.get(opts, :budget, :low))
+    api_key = Keyword.get(opts, :api_key)
 
     body = %{query: question, budget: budget}
 
     Retry.with_retry(fn ->
-      case rest_post(url, "/v1/default/banks/#{bank_id}/reflect", body, config.timeout_reflect_ms) do
+      case rest_post(url, "/v1/default/banks/#{bank_id}/reflect", body, config.timeout_reflect_ms, api_key: api_key) do
         {:ok, %{"text" => text}} -> {:ok, text}
         {:ok, other} -> {:ok, Map.get(other, "text", "No insights available")}
         error -> error
@@ -304,10 +312,11 @@ defmodule LlmCore.Memory.Hindsight do
 
   # ── REST client ──────────────────────────────────────────────────────────
 
-  defp rest_get(base_url, path, timeout) do
+  defp rest_get(base_url, path, timeout, opts \\ []) do
     url = String.trim_trailing(base_url, "/") <> path
+    api_key = Keyword.get(opts, :api_key)
 
-    case Req.get(url, headers: build_headers(base_url), receive_timeout: timeout) do
+    case Req.get(url, headers: build_headers(api_key), receive_timeout: timeout) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
@@ -319,10 +328,11 @@ defmodule LlmCore.Memory.Hindsight do
 
   @doc false
   @spec rest_post(String.t(), String.t(), map(), pos_integer()) :: {:ok, map()} | {:error, term()}
-  def rest_post(base_url, path, body, timeout) do
+  def rest_post(base_url, path, body, timeout, opts \\ []) do
     url = String.trim_trailing(base_url, "/") <> path
+    api_key = Keyword.get(opts, :api_key)
 
-    case Req.post(url, json: body, headers: build_headers(base_url), receive_timeout: timeout) do
+    case Req.post(url, json: body, headers: build_headers(api_key), receive_timeout: timeout) do
       {:ok, %{status: 200, body: response}} -> {:ok, response}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
@@ -333,10 +343,11 @@ defmodule LlmCore.Memory.Hindsight do
     e -> {:error, {:exception, e}}
   end
 
-  defp rest_put(base_url, path, body, timeout) do
+  defp rest_put(base_url, path, body, timeout, opts) do
     url = String.trim_trailing(base_url, "/") <> path
+    api_key = Keyword.get(opts, :api_key)
 
-    case Req.put(url, json: body, headers: build_headers(base_url), receive_timeout: timeout) do
+    case Req.put(url, json: body, headers: build_headers(api_key), receive_timeout: timeout) do
       {:ok, %{status: s, body: response}} when s in 200..201 -> {:ok, response}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
@@ -346,10 +357,11 @@ defmodule LlmCore.Memory.Hindsight do
     e -> {:error, {:exception, e}}
   end
 
-  defp rest_delete(base_url, path, timeout) do
+  defp rest_delete(base_url, path, timeout, opts) do
     url = String.trim_trailing(base_url, "/") <> path
+    api_key = Keyword.get(opts, :api_key)
 
-    case Req.delete(url, headers: build_headers(base_url), receive_timeout: timeout) do
+    case Req.delete(url, headers: build_headers(api_key), receive_timeout: timeout) do
       {:ok, %{status: s, body: response}} when s in 200..204 -> {:ok, response}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
@@ -359,15 +371,21 @@ defmodule LlmCore.Memory.Hindsight do
     e -> {:error, {:exception, e}}
   end
 
-  defp build_headers(_url) do
+  @doc false
+  def build_headers(api_key \\ nil) do
     headers = [{"content-type", "application/json"}]
 
-    # Always send auth if key is available — even localhost may require it
-    # (e.g. Atrapos tenant extension on Hindsight)
-    case Config.get_api_key() do
+    key =
+      case api_key do
+        nil -> Config.get_api_key()
+        "" -> Config.get_api_key()
+        k -> k
+      end
+
+    case key do
       nil -> headers
       "" -> headers
-      key -> [{"authorization", "Bearer #{key}"} | headers]
+      k -> [{"authorization", "Bearer #{k}"} | headers]
     end
   end
 
