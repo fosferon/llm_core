@@ -45,7 +45,8 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   @spec buffer(String.t(), map(), keyword()) :: :ok
   def buffer(content, metadata, opts \\ []) do
     bank_id = Keyword.get(opts, :bank_id)
-    GenServer.cast(__MODULE__, {:buffer, content, metadata, bank_id})
+    api_key = Keyword.get(opts, :api_key)
+    GenServer.cast(__MODULE__, {:buffer, content, metadata, bank_id, api_key})
   end
 
   @doc """
@@ -85,13 +86,14 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   end
 
   @impl true
-  def handle_cast({:buffer, content, metadata, bank_id}, state) do
+  def handle_cast({:buffer, content, metadata, bank_id, api_key}, state) do
     item = %{
       content: content,
       metadata: metadata,
       timestamp: DateTime.to_iso8601(DateTime.utc_now()),
       project_id: get_project_id(),
-      bank_id: bank_id
+      bank_id: bank_id,
+      api_key: api_key
     }
 
     new_buffer = [item | state.buffer]
@@ -201,9 +203,9 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
 
     if url do
       buffer
-      |> Enum.group_by(&Map.get(&1, :bank_id))
-      |> Enum.reduce_while(:ok, fn {bank_id, items}, _acc ->
-        case send_batch(url, bank_id, items) do
+      |> Enum.group_by(&{Map.get(&1, :bank_id), Map.get(&1, :api_key)})
+      |> Enum.reduce_while(:ok, fn {{bank_id, api_key}, items}, _acc ->
+        case send_batch(url, bank_id, items, api_key) do
           :ok -> {:cont, :ok}
           {:error, reason} -> {:halt, {:error, reason}}
         end
@@ -214,7 +216,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     end
   end
 
-  defp send_batch(base_url, bank_id, items) do
+  defp send_batch(base_url, bank_id, items, api_key) do
     config = Config.effective_config()
     timeout = config.timeout_retain_ms
 
@@ -235,7 +237,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     body = %{items: retain_items, async: true}
 
     url = String.trim_trailing(base_url, "/") <> "/v1/default/banks/#{effective_bank}/memories"
-    headers = build_headers(base_url)
+    headers = build_headers(api_key)
 
     case Req.post(url, json: body, headers: headers, receive_timeout: timeout) do
       {:ok, %{status: 200}} ->
@@ -256,16 +258,21 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
       {:error, {:exception, error}}
   end
 
-  defp build_headers(url) do
+  @doc false
+  def build_headers(api_key \\ nil) do
     headers = [{"content-type", "application/json"}]
 
-    if Config.requires_auth?(url) do
-      case Config.get_api_key() do
-        nil -> headers
-        key -> [{"authorization", "Bearer #{key}"} | headers]
+    key =
+      case api_key do
+        nil -> Config.get_api_key()
+        "" -> Config.get_api_key()
+        k -> k
       end
-    else
-      headers
+
+    case key do
+      nil -> headers
+      "" -> headers
+      k -> [{"authorization", "Bearer #{k}"} | headers]
     end
   end
 
