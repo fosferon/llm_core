@@ -57,6 +57,8 @@ logger_level = "info"
 
 ### Provider blocks
 
+#### Module-based providers (API, local)
+
 - `module` must implement `LlmCore.LLM.Provider`
 - `aliases` are used by routing rules/fuzzy suggestions
 - `auth.api_key_env` can be omitted - auto-discovery searches for
@@ -64,6 +66,94 @@ logger_level = "info"
   `auth.discover_env`
 - `cost_tier` (or `metadata.cost_tier`) feeds error suggestions when capability
   requirements fail
+
+#### CLI-based providers
+
+CLI providers use `type = "cli"` and do not require a `module` field. The CLI
+surface is configured entirely in TOML — no Elixir code needed.
+
+```toml
+[providers.my_tool]
+type = "cli"
+enabled = true
+aliases = ["my-tool", "mt"]
+default_model = "v2"
+
+[providers.my_tool.cli]
+binary = "my-tool"                    # required — must be in PATH
+subcommand = "exec"                   # optional subcommand prepended to args
+default_timeout = 60000               # ms, default 1_800_000
+default_model = "v1"                  # fallback if not set at provider level
+prompt_position = "last"              # "last" or "flagged"
+prompt_flag = "-p"                    # required when prompt_position = "flagged"
+prompt_transport = "flagged"          # "last", "flagged", or "stdin"
+system_prompt_transport = "file_flag" # "flag", "file_flag", "inline_fallback", "unsupported"
+cwd_flag = "--cwd"                    # optional
+add_dir_flag = "--add-dir"            # optional
+output_mode = "stdout_text"           # "stdout_text", "final_message_only", "json"
+stdin_hack = false                    # wrap with /bin/sh for stdin redirect
+install_hint = "pip install my-tool"  # shown when binary is missing
+prefix_args = ["--no-interactive"]    # always prepended
+auto_approve_args = ["--yes"]         # appended when auto_approve: true
+sandbox_bypass_args = []              # appended when sandbox_bypass: true
+non_interactive_args = ["--batch"]    # appended when non_interactive: true
+
+[providers.my_tool.cli.flags]
+model = "--model"
+temperature = "--temp"
+system_prompt_file = "--agent-file"
+
+[providers.my_tool.cli.preflight]
+help_args = ["--help"]
+expect_in_help = ["--model"]
+
+[providers.my_tool.capabilities]
+streaming = true
+passthrough = true
+
+[providers.my_tool.metadata]
+cost_tier = "cli"
+```
+
+**Built-in CLI providers** (`claude_code`, `droid`, `pi_cli`, `kimi_cli`,
+`codex_cli`, `gemini_cli`) work without any TOML entry. To override a built-in,
+define a `[providers.<name>]` block with the same ID and `type = "cli"` — the
+TOML definition replaces the built-in completely.
+
+**Validation rules:**
+- `binary` is required and must be a non-empty string
+- `prompt_position = "flagged"` requires `prompt_flag` to be set
+- Enum fields are validated: `prompt_position`, `prompt_transport`,
+  `system_prompt_transport`, `output_mode`
+- Invalid configs are skipped with a warning (same as module providers)
+
+**Availability:** A CLI provider is "available" when `enabled = true` and the
+binary is found in `PATH`. No API key or module loading required.
+
+#### Querying CLI providers at runtime
+
+```elixir
+# List all CLI providers (built-in + configured)
+LlmCore.CLIProvider.Registry.list()
+
+# Only those with binary in PATH
+LlmCore.CLIProvider.Registry.available()
+
+# Fetch by id or alias
+{:ok, entry} = LlmCore.CLIProvider.Registry.fetch(:droid)
+{:ok, entry} = LlmCore.CLIProvider.Registry.fetch("pi")
+
+# Get a ready-to-use provider struct
+{:ok, provider} = LlmCore.CLIProvider.Registry.resolve(:droid)
+
+# Inspect capabilities
+{:ok, caps} = LlmCore.CLIProvider.Registry.capabilities(:codex_cli)
+```
+
+Each entry includes: `id`, `aliases`, `binary`, `available?`, `install_hint`,
+`default_model`, `capabilities`, `supports_auto_approve?`,
+`supports_sandbox_bypass?`, `supports_system_prompt_file?`, `supports_cwd?`,
+`supports_add_dir?`, `metadata`.
 
 ### Routing blocks
 

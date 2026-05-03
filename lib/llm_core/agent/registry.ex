@@ -317,14 +317,6 @@ defmodule LlmCore.Agent.Registry do
     base_state = %{state | agents: manual_agents, auto_agents: MapSet.new()}
 
     Enum.reduce(providers, base_state, fn %Definition{} = definition, acc_state ->
-      # `merge_provider_options/2` now returns an atom-keyed map, so the
-      # subsequent `normalize_agent_config/1` call was a no-op — removed.
-      # See GC-760 for the string/atom key collision bug this fixes.
-      config =
-        definition.agent_config
-        |> merge_provider_options(definition.options)
-        |> maybe_put_model(definition.default_model)
-
       aliases =
         definition.aliases
         |> List.wrap()
@@ -334,9 +326,35 @@ defmodule LlmCore.Agent.Registry do
           list -> list
         end
 
-      Enum.reduce(aliases, acc_state, fn alias, state_acc ->
-        register_agent(state_acc, alias, definition.module, config, true)
-      end)
+      case definition.provider_kind do
+        :cli ->
+          # CLI providers: register with CLIProvider module and the cli_provider
+          # name in config so Agent.build_provider_struct resolves the struct.
+          cli_name =
+            if definition.cli_config, do: definition.cli_config.name, else: nil
+
+          config =
+            %{}
+            |> maybe_put_model(definition.default_model)
+            |> then(fn c ->
+              if cli_name, do: Map.put(c, :cli_provider, cli_name), else: c
+            end)
+
+          Enum.reduce(aliases, acc_state, fn alias, state_acc ->
+            register_agent(state_acc, alias, LlmCore.LLM.CLIProvider, config, true)
+          end)
+
+        _ ->
+          # Module providers: existing path
+          config =
+            definition.agent_config
+            |> merge_provider_options(definition.options)
+            |> maybe_put_model(definition.default_model)
+
+          Enum.reduce(aliases, acc_state, fn alias, state_acc ->
+            register_agent(state_acc, alias, definition.module, config, true)
+          end)
+      end
     end)
   end
 

@@ -120,6 +120,47 @@ api_key_env = "ZAI_API_KEY"
 tool_use = true
 streaming = true
 
+# ── CLI Providers (Dynamic) ───────────────────────────────────
+#
+# CLI providers use type = "cli" and configure the CLI surface in
+# [providers.<id>.cli]. No Elixir module needed — just config.
+#
+# Built-in CLI providers (claude_code, droid, pi_cli, kimi_cli,
+# codex_cli, gemini_cli) work without TOML entries. Define a
+# [providers.<name>] block with the same ID to override a built-in.
+#
+# Example — custom CLI provider:
+#
+# [providers.my_tool]
+# type = "cli"
+# enabled = true
+# aliases = ["my-tool", "mt"]
+#
+# [providers.my_tool.cli]
+# binary = "my-tool"
+# default_model = "v2"
+# default_timeout = 60000
+# prompt_position = "last"
+# stdin_hack = false
+# install_hint = "pip install my-tool"
+# prefix_args = ["--no-interactive"]
+# auto_approve_args = ["--yes"]
+#
+# [providers.my_tool.cli.flags]
+# model = "--model"
+# temperature = "--temp"
+#
+# [providers.my_tool.cli.preflight]
+# help_args = ["--help"]
+# expect_in_help = ["--model"]
+#
+# [providers.my_tool.capabilities]
+# streaming = true
+# passthrough = true
+#
+# [providers.my_tool.metadata]
+# cost_tier = "cli"
+
 # ── Native Provider Cascade ──────────────────────────────────
 #
 # The ordered list of providers tried when dispatching an in-process

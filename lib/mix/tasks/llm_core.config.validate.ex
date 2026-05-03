@@ -39,7 +39,11 @@ defmodule Mix.Tasks.LlmCore.Config.Validate do
     |> Enum.each(fn {id, definition} ->
       status = if definition.available?, do: "available", else: "unavailable"
       aliases = Enum.join(definition.aliases, ", ")
-      IO.puts("- #{id} (#{inspect(definition.module)}) -> #{status} [aliases: #{aliases}]")
+
+      kind_label =
+        if definition.provider_kind == :cli, do: "CLI", else: inspect(definition.module)
+
+      IO.puts("- #{id} (#{kind_label}) -> #{status} [aliases: #{aliases}]")
     end)
 
     case LlmCore.Config.Store.get_routing() do

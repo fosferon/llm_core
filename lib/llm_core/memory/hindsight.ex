@@ -241,7 +241,9 @@ defmodule LlmCore.Memory.Hindsight do
     }
 
     Retry.with_retry(fn ->
-      rest_post(url, "/v1/default/banks/#{bank_id}/memories", body, config.timeout_retain_ms, api_key: api_key)
+      rest_post(url, "/v1/default/banks/#{bank_id}/memories", body, config.timeout_retain_ms,
+        api_key: api_key
+      )
     end)
   end
 
@@ -284,7 +286,9 @@ defmodule LlmCore.Memory.Hindsight do
     body = %{query: question, budget: budget}
 
     Retry.with_retry(fn ->
-      case rest_post(url, "/v1/default/banks/#{bank_id}/reflect", body, config.timeout_reflect_ms, api_key: api_key) do
+      case rest_post(url, "/v1/default/banks/#{bank_id}/reflect", body, config.timeout_reflect_ms,
+             api_key: api_key
+           ) do
         {:ok, %{"text" => text}} -> {:ok, text}
         {:ok, other} -> {:ok, Map.get(other, "text", "No insights available")}
         error -> error

@@ -72,16 +72,30 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
       end
 
     Enum.map(providers, fn definition ->
-      %{
+      base = %{
         id: definition.id,
-        module: inspect(definition.module),
+        kind: definition.provider_kind,
         aliases: definition.aliases,
         available?: definition.available?,
         default_agent: definition.default_agent,
-        capabilities: definition.capabilities,
-        options: definition.options,
-        auth: Map.drop(definition.auth, ["api_key_present"])
+        capabilities: definition.capabilities
       }
+
+      case definition.provider_kind do
+        :cli ->
+          Map.merge(base, %{
+            binary: if(definition.cli_config, do: definition.cli_config.binary, else: nil),
+            install_hint:
+              if(definition.cli_config, do: definition.cli_config.install_hint, else: nil)
+          })
+
+        _ ->
+          Map.merge(base, %{
+            module: inspect(definition.module),
+            options: definition.options,
+            auth: Map.drop(definition.auth, ["api_key_present"])
+          })
+      end
     end)
   end
 

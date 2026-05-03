@@ -9,6 +9,7 @@ defmodule LlmCore.Config.Loader do
   alias LlmCore.Config.Store
   alias LlmCore.Memory.Hindsight.Config, as: HindsightConfig
   alias LlmCore.Paths
+  alias LlmCore.LLM.CLIProvider
   alias LlmCore.Provider.Definition
   alias LlmCore.Router.RoutingTable
   alias LlmCore.Telemetry.Settings, as: TelemetrySettings
@@ -75,6 +76,7 @@ defmodule LlmCore.Config.Loader do
          {:ok, providers} <- build_providers(config) do
       :ok = Store.put(:config, :raw, config)
       :ok = Store.put(:config, :providers, providers)
+      store_cli_configs(providers)
       dispatch_reload(:providers)
       sync_registry()
       apply_config_sections(config)
@@ -210,6 +212,10 @@ defmodule LlmCore.Config.Loader do
     end
   end
 
+  defp normalize_provider(id, %{"type" => "cli"} = attrs) when is_binary(id) do
+    normalize_cli_provider(id, attrs)
+  end
+
   defp normalize_provider(id, attrs) when is_binary(id) and is_map(attrs) do
     with {:ok, mod} <- resolve_module(Map.get(attrs, "module")),
          {:ok, type} <- resolve_type(Map.get(attrs, "type")) do
@@ -250,6 +256,7 @@ defmodule LlmCore.Config.Loader do
       provider = %Definition{
         id: id,
         module: mod,
+        provider_kind: :module,
         type: type,
         enabled: enabled,
         aliases: aliases,
@@ -269,6 +276,175 @@ defmodule LlmCore.Config.Loader do
   end
 
   defp normalize_provider(_, _), do: {:error, :invalid_provider}
+
+  # ── CLI Provider Normalization ────────────────────────────
+
+  defp normalize_cli_provider(id, attrs) do
+    cli_attrs = Map.get(attrs, "cli", %{})
+
+    case build_cli_config(id, cli_attrs) do
+      {:ok, cli_config} ->
+        enabled = Map.get(attrs, "enabled", true)
+        aliases = normalize_aliases(Map.get(attrs, "aliases", []), id)
+        agent = Map.get(attrs, "agent", %{})
+        agent_name = Map.get(agent, "name") || List.first(aliases) || id
+        default_model = Map.get(attrs, "default_model") || cli_config.default_model
+        metadata = normalize_metadata(attrs)
+
+        capabilities =
+          attrs
+          |> Map.get("capabilities", %{})
+          |> normalize_capabilities()
+
+        {available?, availability} = evaluate_cli_availability(enabled, cli_config)
+
+        provider = %Definition{
+          id: id,
+          module: nil,
+          provider_kind: :cli,
+          type: :cli,
+          enabled: enabled,
+          aliases: aliases,
+          default_agent: agent_name,
+          default_model: default_model,
+          agent_config: %{},
+          options: %{},
+          capabilities: capabilities,
+          auth: %{},
+          metadata: metadata,
+          cli_config: cli_config,
+          available?: available?,
+          availability: availability
+        }
+
+        {:ok, provider}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @valid_prompt_positions ~w(last flagged)
+  @valid_prompt_transports ~w(last flagged stdin)
+  @valid_system_prompt_transports ~w(flag file_flag inline_fallback unsupported)
+  @valid_output_modes ~w(stdout_text final_message_only json)
+
+  defp build_cli_config(id, attrs) when is_map(attrs) do
+    binary = Map.get(attrs, "binary")
+
+    cond do
+      not is_binary(binary) or binary == "" ->
+        {:error, {:cli_missing_binary, id}}
+
+      true ->
+        with :ok <- validate_cli_enums(id, attrs),
+             :ok <- validate_cli_consistency(id, attrs) do
+          name = safe_to_atom(id)
+
+          config = %CLIProvider.Config{
+            name: name,
+            binary: binary,
+            subcommand: blank_to_nil(Map.get(attrs, "subcommand")),
+            default_timeout: Map.get(attrs, "default_timeout", 1_800_000),
+            default_model: Map.get(attrs, "default_model", "cli-default"),
+            flags: normalize_cli_flags(Map.get(attrs, "flags", %{})),
+            prompt_position: safe_to_atom(Map.get(attrs, "prompt_position", "last")),
+            prompt_flag: blank_to_nil(Map.get(attrs, "prompt_flag")),
+            prefix_args: List.wrap(Map.get(attrs, "prefix_args", [])),
+            stdin_hack: Map.get(attrs, "stdin_hack", false) == true,
+            install_hint: blank_to_nil(Map.get(attrs, "install_hint")),
+            prompt_transport: safe_to_atom_or_nil(Map.get(attrs, "prompt_transport")),
+            system_prompt_transport:
+              safe_to_atom_or_nil(Map.get(attrs, "system_prompt_transport")),
+            cwd_flag: blank_to_nil(Map.get(attrs, "cwd_flag")),
+            add_dir_flag: blank_to_nil(Map.get(attrs, "add_dir_flag")),
+            output_mode: safe_to_atom_or_nil(Map.get(attrs, "output_mode")),
+            non_interactive_args: List.wrap(Map.get(attrs, "non_interactive_args", [])),
+            auto_approve_args: List.wrap(Map.get(attrs, "auto_approve_args", [])),
+            sandbox_bypass_args: List.wrap(Map.get(attrs, "sandbox_bypass_args", [])),
+            preflight: normalize_cli_preflight(Map.get(attrs, "preflight", %{}))
+          }
+
+          {:ok, config}
+        end
+    end
+  end
+
+  defp build_cli_config(id, _), do: {:error, {:cli_missing_config, id}}
+
+  defp validate_cli_enums(id, attrs) do
+    checks = [
+      {"prompt_position", Map.get(attrs, "prompt_position"), @valid_prompt_positions},
+      {"prompt_transport", Map.get(attrs, "prompt_transport"), @valid_prompt_transports},
+      {"system_prompt_transport", Map.get(attrs, "system_prompt_transport"),
+       @valid_system_prompt_transports},
+      {"output_mode", Map.get(attrs, "output_mode"), @valid_output_modes}
+    ]
+
+    Enum.reduce_while(checks, :ok, fn {field, value, valid}, :ok ->
+      cond do
+        is_nil(value) -> {:cont, :ok}
+        value in valid -> {:cont, :ok}
+        true -> {:halt, {:error, {:cli_invalid_enum, id, field, value, valid}}}
+      end
+    end)
+  end
+
+  defp validate_cli_consistency(id, attrs) do
+    prompt_position = Map.get(attrs, "prompt_position", "last")
+    prompt_flag = Map.get(attrs, "prompt_flag")
+
+    cond do
+      prompt_position == "flagged" and (is_nil(prompt_flag) or prompt_flag == "") ->
+        {:error, {:cli_consistency, id, "prompt_position=flagged requires prompt_flag"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp normalize_cli_flags(flags) when is_map(flags) do
+    Map.new(flags, fn {k, v} -> {safe_to_atom(k), to_string(v)} end)
+  end
+
+  defp normalize_cli_flags(_), do: %{}
+
+  defp normalize_cli_preflight(preflight) when is_map(preflight) do
+    %{}
+    |> maybe_put_list(:help_args, Map.get(preflight, "help_args"))
+    |> maybe_put_list(:expect_in_help, Map.get(preflight, "expect_in_help"))
+    |> maybe_put_list(:version_args, Map.get(preflight, "version_args"))
+  end
+
+  defp normalize_cli_preflight(_), do: %{}
+
+  defp maybe_put_list(map, _key, nil), do: map
+  defp maybe_put_list(map, key, list) when is_list(list), do: Map.put(map, key, list)
+  defp maybe_put_list(map, _key, _), do: map
+
+  defp evaluate_cli_availability(false, _cli_config), do: {false, {:error, :disabled}}
+
+  defp evaluate_cli_availability(true, %CLIProvider.Config{binary: binary}) do
+    if System.find_executable(binary) do
+      {true, :ok}
+    else
+      {false, {:error, :binary_not_found}}
+    end
+  end
+
+  defp safe_to_atom(value) when is_atom(value), do: value
+
+  defp safe_to_atom(value) when is_binary(value) do
+    try do
+      String.to_existing_atom(value)
+    rescue
+      ArgumentError -> String.to_atom(value)
+    end
+  end
+
+  defp safe_to_atom_or_nil(nil), do: nil
+  defp safe_to_atom_or_nil(""), do: nil
+  defp safe_to_atom_or_nil(value), do: safe_to_atom(value)
 
   defp resolve_module(nil), do: {:error, :missing_module}
 
@@ -514,6 +690,15 @@ defmodule LlmCore.Config.Loader do
       <<>> -> nil
       other -> other
     end
+  end
+
+  defp store_cli_configs(providers) do
+    cli_configs =
+      providers
+      |> Enum.filter(fn {_id, def} -> def.provider_kind == :cli and def.cli_config != nil end)
+      |> Map.new(fn {_id, def} -> {def.cli_config.name, def.cli_config} end)
+
+    :ok = Store.put(:config, :cli_providers, cli_configs)
   end
 
   defp sync_registry do

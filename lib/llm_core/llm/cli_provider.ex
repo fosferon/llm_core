@@ -287,17 +287,30 @@ defmodule LlmCore.LLM.CLIProvider do
 
   # ── Config Access ─────────────────────────────────────────
 
-  @doc "Returns the built-in config for a known provider name."
+  @doc """
+  Returns the config for a provider name.
+
+  Resolution order:
+  1. Runtime store (TOML-loaded CLI configs)
+  2. Built-in `@builtins`
+  3. Error
+  """
   @spec config(atom()) :: {:ok, Config.t()} | {:error, String.t()}
   def config(name) when is_atom(name) do
-    case Map.fetch(@builtins, name) do
-      {:ok, cfg} -> {:ok, cfg}
-      :error -> {:error, "Unknown CLI provider: #{name}"}
+    case fetch_runtime_config(name) do
+      {:ok, cfg} ->
+        {:ok, cfg}
+
+      :error ->
+        case Map.fetch(@builtins, name) do
+          {:ok, cfg} -> {:ok, cfg}
+          :error -> {:error, "Unknown CLI provider: #{name}"}
+        end
     end
   end
 
-  @doc "Creates a CLIProvider from a built-in name or a Config struct."
-  @spec from_config(atom() | Config.t()) :: t()
+  @doc "Creates a CLIProvider from a built-in name, a string id/alias, or a Config struct."
+  @spec from_config(atom() | String.t() | Config.t()) :: t()
   def from_config(name) when is_atom(name) do
     case config(name) do
       {:ok, cfg} -> %__MODULE__{config: cfg}
@@ -305,7 +318,130 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
+  def from_config(name) when is_binary(name) do
+    from_config(safe_to_existing_atom(name))
+  end
+
   def from_config(%Config{} = cfg), do: %__MODULE__{config: cfg}
+
+  @doc "Returns the map of built-in CLI provider configs."
+  @spec builtins() :: %{atom() => Config.t()}
+  def builtins, do: @builtins
+
+  @doc """
+  Returns all known CLI provider configs — runtime (TOML) merged with builtins.
+  Runtime configs override builtins with the same name.
+  """
+  @spec list_all_configs() :: %{atom() => Config.t()}
+  def list_all_configs do
+    runtime = runtime_cli_configs()
+    Map.merge(@builtins, runtime)
+  end
+
+  @doc """
+  Resolves an alias or id string to the canonical provider name atom.
+  Checks runtime definitions first (via Provider.Registry aliases), then builtins.
+  """
+  @spec resolve_id(atom() | String.t()) :: {:ok, atom()} | {:error, :not_found}
+  def resolve_id(name) when is_atom(name) do
+    all = list_all_configs()
+    if Map.has_key?(all, name), do: {:ok, name}, else: {:error, :not_found}
+  end
+
+  def resolve_id(name) when is_binary(name) do
+    atom_name = safe_to_existing_atom(name)
+    all = list_all_configs()
+
+    cond do
+      Map.has_key?(all, atom_name) ->
+        {:ok, atom_name}
+
+      true ->
+        # Check provider definitions for alias match
+        case find_cli_by_alias(name) do
+          {:ok, id_atom} -> {:ok, id_atom}
+          :error -> {:error, :not_found}
+        end
+    end
+  end
+
+  @doc """
+  Fetches a CLI config by id or alias. Returns a ready-to-use `%CLIProvider.Config{}`.
+  """
+  @spec fetch_config(atom() | String.t()) :: {:ok, Config.t()} | {:error, :not_found}
+  def fetch_config(name) when is_atom(name) do
+    case config(name) do
+      {:ok, cfg} -> {:ok, cfg}
+      {:error, _} -> {:error, :not_found}
+    end
+  end
+
+  def fetch_config(name) when is_binary(name) do
+    case resolve_id(name) do
+      {:ok, id} -> fetch_config(id)
+      error -> error
+    end
+  end
+
+  @doc """
+  Builds a ready-to-use `%CLIProvider{}` struct from an id or alias.
+  """
+  @spec build_provider(atom() | String.t()) :: {:ok, t()} | {:error, :not_found}
+  def build_provider(name) do
+    case fetch_config(name) do
+      {:ok, cfg} -> {:ok, %__MODULE__{config: cfg}}
+      error -> error
+    end
+  end
+
+  # ── Private: Runtime Store Access ─────────────────────────
+
+  defp fetch_runtime_config(name) when is_atom(name) do
+    case runtime_cli_configs() do
+      configs when is_map(configs) -> Map.fetch(configs, name)
+      _ -> :error
+    end
+  end
+
+  defp runtime_cli_configs do
+    case LlmCore.Config.Store.fetch(:config, :cli_providers) do
+      {:ok, configs} when is_map(configs) -> configs
+      _ -> %{}
+    end
+  rescue
+    # Store may not be started yet (e.g. during compilation or early boot)
+    ArgumentError -> %{}
+  end
+
+  defp find_cli_by_alias(alias_str) do
+    alias_down = String.downcase(alias_str)
+
+    # Check provider definitions for CLI providers with matching alias
+    case LlmCore.Config.Store.fetch(:config, :providers) do
+      {:ok, providers} ->
+        providers
+        |> Enum.find(fn {_id, def} ->
+          def.provider_kind == :cli and alias_down in (def.aliases || [])
+        end)
+        |> case do
+          {_id, def} -> {:ok, def.cli_config.name}
+          nil -> :error
+        end
+
+      _ ->
+        :error
+    end
+  rescue
+    ArgumentError -> :error
+  end
+
+  defp safe_to_existing_atom(str) when is_binary(str) do
+    try do
+      String.to_existing_atom(str)
+    rescue
+      ArgumentError -> String.to_atom(str)
+    end
+  end
 
   # ── Provider API (struct-based; see Provider.dispatch/3) ─
 

@@ -221,7 +221,10 @@ defmodule LlmCore.Memory.Hindsight.WriteBufferTest do
         send(parent, {:request, req})
 
         body = ~s<{"ok":true}>
-        response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: #{byte_size(body)}\r\n\r\n#{body}"
+
+        response =
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: #{byte_size(body)}\r\n\r\n#{body}"
+
         :gen_tcp.send(socket, response)
         :gen_tcp.close(socket)
 

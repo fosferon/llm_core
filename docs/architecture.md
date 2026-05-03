@@ -130,12 +130,36 @@ All providers implement `LlmCore.LLM.Provider`:
 
 ### Provider Registry
 
-Providers are registered via TOML configuration. Each provider block specifies:
+Providers are registered via TOML configuration. There are two kinds:
 
-- `module` - The Elixir module implementing the behaviour
+#### Module providers (`provider_kind: :module`)
+- `module` - The Elixir module implementing the `Provider` behaviour
 - `aliases` - Names used by routing rules
 - `auth.api_key_env` - Environment variable for API key
 - `cost_tier` - Used for error suggestions and routing decisions
+
+#### CLI providers (`provider_kind: :cli`)
+- `type = "cli"` - No module required
+- `[providers.<id>.cli]` - CLI-specific configuration (binary, flags, transports)
+- Config-driven: new CLI providers are added via TOML, no Elixir code needed
+- Built-in providers (claude_code, droid, pi_cli, kimi_cli, codex_cli, gemini_cli)
+  work without config; TOML entries with the same ID override them
+- Availability is determined by binary presence in PATH
+
+### CLI Provider Registry
+
+`LlmCore.CLIProvider.Registry` provides a dedicated query surface for CLI
+providers. It merges built-in definitions with TOML-configured ones (TOML wins
+on conflict) and exposes:
+
+- `list/0` — all known CLI providers with structured metadata
+- `available/0` — only those with binary in PATH
+- `fetch/1` — by atom ID or string alias
+- `resolve/1` — returns a ready-to-use `%CLIProvider{}` struct
+- `capabilities/1` — introspect provider capabilities
+
+This is the recommended API for downstream apps that need to discover or select
+CLI providers dynamically, replacing hard-coded provider lists.
 
 ---
 
