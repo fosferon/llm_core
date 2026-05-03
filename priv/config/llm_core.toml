@@ -120,16 +120,248 @@ api_key_env = "ZAI_API_KEY"
 tool_use = true
 streaming = true
 
-# ── CLI Providers (Dynamic) ───────────────────────────────────
+# ── CLI Providers ─────────────────────────────────────────────
 #
 # CLI providers use type = "cli" and configure the CLI surface in
 # [providers.<id>.cli]. No Elixir module needed — just config.
 #
-# Built-in CLI providers (claude_code, droid, pi_cli, kimi_cli,
-# codex_cli, gemini_cli) work without TOML entries. Define a
-# [providers.<name>] block with the same ID to override a built-in.
-#
-# Example — custom CLI provider:
+# To add a custom CLI provider, copy any block below and adjust.
+# To override a default, redefine the same [providers.<id>] in a
+# project or global override TOML.
+
+[providers.claude_code]
+type = "cli"
+enabled = true
+aliases = ["claude-code"]
+
+[providers.claude_code.cli]
+binary = "claude"
+default_timeout = 1800000
+default_model = "claude-code-cli"
+prompt_position = "flagged"
+prompt_flag = "-p"
+prompt_transport = "flagged"
+system_prompt_transport = "file_flag"
+add_dir_flag = "--add-dir"
+output_mode = "stdout_text"
+stdin_hack = true
+prefix_args = ["--print"]
+install_hint = "Install with: npm install -g @anthropic/claude-code"
+
+[providers.claude_code.cli.flags]
+model = "--model"
+permission_mode = "--permission-mode"
+dangerously_skip_permissions = "--dangerously-skip-permissions"
+allow_dangerously_skip_permissions = "--allow-dangerously-skip-permissions"
+allowed_tools = "--allowed-tools"
+disallowed_tools = "--disallowed-tools"
+system_prompt = "--append-system-prompt"
+system_prompt_file = "--append-system-prompt-file"
+add_dir = "--add-dir"
+
+[providers.claude_code.cli.preflight]
+help_args = ["--help"]
+expect_in_help = ["--print", "--model"]
+
+[providers.claude_code.capabilities]
+streaming = true
+passthrough = true
+
+[providers.claude_code.metadata]
+cost_tier = "cli"
+
+# ──
+
+[providers.droid]
+type = "cli"
+enabled = true
+aliases = ["droid"]
+
+[providers.droid.cli]
+binary = "droid"
+subcommand = "exec"
+default_timeout = 1800000
+default_model = "claude-opus-4-6"
+prompt_position = "last"
+prompt_transport = "last"
+system_prompt_transport = "file_flag"
+cwd_flag = "--cwd"
+output_mode = "stdout_text"
+stdin_hack = false
+auto_approve_args = ["--auto", "high"]
+install_hint = "Install with: curl -fsSL https://app.factory.ai/cli | sh"
+
+[providers.droid.cli.flags]
+model = "--model"
+auto = "--auto"
+cwd = "--cwd"
+worktree = "--worktree"
+system_prompt = "--append-system-prompt"
+system_prompt_file = "--append-system-prompt-file"
+enabled_tools = "--enabled-tools"
+disabled_tools = "--disabled-tools"
+
+[providers.droid.cli.preflight]
+help_args = ["exec", "--help"]
+expect_in_help = ["--auto", "--cwd"]
+
+[providers.droid.capabilities]
+streaming = true
+passthrough = true
+
+[providers.droid.metadata]
+cost_tier = "cli"
+
+# ──
+
+[providers.pi_cli]
+type = "cli"
+enabled = true
+aliases = ["pi", "pi-cli"]
+
+[providers.pi_cli.cli]
+binary = "pi"
+default_timeout = 1800000
+default_model = "pi-cli"
+prompt_position = "last"
+prompt_transport = "last"
+system_prompt_transport = "file_flag"
+output_mode = "stdout_text"
+stdin_hack = true
+# --no-session --no-extensions: prevent extension auto-loading in
+# daemon-dispatched runs where duplicate tool registrations can cause
+# Pi startup conflicts and apparent dispatch timeouts.
+prefix_args = ["--print", "--no-session", "--no-extensions"]
+install_hint = "Install pi CLI and ensure `pi` is in PATH"
+
+[providers.pi_cli.cli.flags]
+model = "--model"
+provider = "--provider"
+thinking = "--thinking"
+system_prompt = "--append-system-prompt"
+system_prompt_file = "--append-system-prompt"
+
+[providers.pi_cli.cli.preflight]
+help_args = ["--help"]
+expect_in_help = ["--print", "--model"]
+
+[providers.pi_cli.capabilities]
+streaming = true
+passthrough = true
+
+[providers.pi_cli.metadata]
+cost_tier = "cli"
+
+# ──
+
+[providers.kimi_cli]
+type = "cli"
+enabled = true
+aliases = ["kimi", "kimi-cli"]
+
+[providers.kimi_cli.cli]
+binary = "kimi-cli"
+default_timeout = 1800000
+default_model = "kimi-cli"
+prompt_position = "flagged"
+prompt_flag = "--prompt"
+prompt_transport = "flagged"
+system_prompt_transport = "file_flag"
+cwd_flag = "--work-dir"
+add_dir_flag = "--add-dir"
+output_mode = "final_message_only"
+stdin_hack = false
+prefix_args = ["--print", "--output-format", "text", "--final-message-only"]
+auto_approve_args = ["--yolo"]
+install_hint = "Install Kimi CLI and ensure `kimi-cli` is in PATH"
+
+[providers.kimi_cli.cli.flags]
+model = "--model"
+cwd = "--work-dir"
+add_dir = "--add-dir"
+system_prompt_file = "--agent-file"
+
+[providers.kimi_cli.cli.preflight]
+help_args = ["--help"]
+expect_in_help = ["--agent-file", "--print", "--work-dir"]
+
+[providers.kimi_cli.capabilities]
+streaming = true
+passthrough = true
+
+[providers.kimi_cli.metadata]
+cost_tier = "cli"
+
+# ──
+
+[providers.codex_cli]
+type = "cli"
+enabled = true
+aliases = ["codex", "codex-cli"]
+
+[providers.codex_cli.cli]
+binary = "codex"
+subcommand = "exec"
+default_timeout = 1800000
+default_model = "codex-cli"
+prompt_position = "last"
+prompt_transport = "last"
+system_prompt_transport = "inline_fallback"
+cwd_flag = "--cd"
+add_dir_flag = "--add-dir"
+output_mode = "stdout_text"
+stdin_hack = false
+auto_approve_args = ["--full-auto"]
+sandbox_bypass_args = ["--dangerously-bypass-approvals-and-sandbox"]
+install_hint = "Install with: npm install -g @openai/codex"
+
+[providers.codex_cli.cli.flags]
+model = "--model"
+cwd = "--cd"
+add_dir = "--add-dir"
+
+[providers.codex_cli.cli.preflight]
+help_args = ["exec", "--help"]
+expect_in_help = ["--full-auto", "--add-dir"]
+
+[providers.codex_cli.capabilities]
+streaming = true
+passthrough = true
+
+[providers.codex_cli.metadata]
+cost_tier = "cli"
+
+# ──
+
+[providers.gemini_cli]
+type = "cli"
+enabled = true
+aliases = ["gemini", "gemini-cli"]
+
+[providers.gemini_cli.cli]
+binary = "gemini"
+default_timeout = 1800000
+default_model = "gemini-cli"
+prompt_position = "last"
+prompt_transport = "last"
+output_mode = "stdout_text"
+stdin_hack = false
+install_hint = "Install the Google Cloud CLI with Gemini support"
+
+[providers.gemini_cli.cli.flags]
+model = "--model"
+
+[providers.gemini_cli.cli.preflight]
+help_args = ["--help"]
+
+[providers.gemini_cli.capabilities]
+streaming = true
+passthrough = true
+
+[providers.gemini_cli.metadata]
+cost_tier = "cli"
+
+# ── Custom CLI Provider Example ──────────────────────────────
 #
 # [providers.my_tool]
 # type = "cli"

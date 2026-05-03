@@ -89,7 +89,11 @@ defmodule LlmCore.LLM.CLIProvider do
   or constructed in code. New CLI clients are added without writing
   Elixir code.
 
-  ## Built-in Providers
+  ## Default Providers
+
+  The following CLI providers ship as `type = "cli"` entries in
+  `priv/config/llm_core.toml`. Override or remove them via project
+  or global TOML overrides — no Elixir changes needed.
 
   | Name | Binary | Notes |
   |---|---|---|
@@ -138,148 +142,15 @@ defmodule LlmCore.LLM.CLIProvider do
   # on `%CLIProvider{}` and routes to these functions.
 
   # ── Built-in Configs ───────────────────────────────────────
+  #
+  # Historically, CLI provider configs were hard-coded here. They now
+  # live in `priv/config/llm_core.toml` as `type = "cli"` provider
+  # entries, loaded at runtime via Config.Loader. This map is kept
+  # empty as a fallback merge target — all provider definitions are
+  # config-driven, so new CLIs can be added, removed, or updated
+  # without touching Elixir source.
 
-  @builtins %{
-    claude_code: %Config{
-      name: :claude_code,
-      binary: "claude",
-      default_timeout: 1_800_000,
-      default_model: "claude-code-cli",
-      flags: %{
-        model: "--model",
-        permission_mode: "--permission-mode",
-        dangerously_skip_permissions: "--dangerously-skip-permissions",
-        allow_dangerously_skip_permissions: "--allow-dangerously-skip-permissions",
-        allowed_tools: "--allowed-tools",
-        disallowed_tools: "--disallowed-tools",
-        system_prompt: "--append-system-prompt",
-        system_prompt_file: "--append-system-prompt-file",
-        add_dir: "--add-dir"
-      },
-      prompt_position: :flagged,
-      prompt_flag: "-p",
-      prefix_args: ["--print"],
-      stdin_hack: true,
-      prompt_transport: :flagged,
-      system_prompt_transport: :file_flag,
-      add_dir_flag: "--add-dir",
-      output_mode: :stdout_text,
-      preflight: %{help_args: ["--help"], expect_in_help: ["--print", "--model"]},
-      install_hint: "Install with: npm install -g @anthropic/claude-code"
-    },
-    droid: %Config{
-      name: :droid,
-      binary: "droid",
-      subcommand: "exec",
-      default_timeout: 1_800_000,
-      default_model: "claude-opus-4-6",
-      flags: %{
-        model: "--model",
-        auto: "--auto",
-        cwd: "--cwd",
-        worktree: "--worktree",
-        system_prompt: "--append-system-prompt",
-        system_prompt_file: "--append-system-prompt-file",
-        enabled_tools: "--enabled-tools",
-        disabled_tools: "--disabled-tools"
-      },
-      prompt_position: :last,
-      prompt_transport: :last,
-      system_prompt_transport: :file_flag,
-      cwd_flag: "--cwd",
-      stdin_hack: false,
-      output_mode: :stdout_text,
-      auto_approve_args: ["--auto", "high"],
-      preflight: %{help_args: ["exec", "--help"], expect_in_help: ["--auto", "--cwd"]},
-      install_hint: "Install with: curl -fsSL https://app.factory.ai/cli | sh"
-    },
-    pi_cli: %Config{
-      name: :pi_cli,
-      binary: "pi",
-      default_timeout: 1_800_000,
-      default_model: "pi-cli",
-      flags: %{
-        model: "--model",
-        provider: "--provider",
-        thinking: "--thinking",
-        system_prompt: "--append-system-prompt",
-        system_prompt_file: "--append-system-prompt"
-      },
-      prompt_position: :last,
-      prompt_transport: :last,
-      system_prompt_transport: :file_flag,
-      stdin_hack: true,
-      # Disable extension auto-loading for daemon-dispatched runs.
-      # In mixed project/global setups, duplicate tool registrations
-      # can cause Pi startup conflicts and apparent dispatch timeouts.
-      prefix_args: ["--print", "--no-session", "--no-extensions"],
-      output_mode: :stdout_text,
-      preflight: %{help_args: ["--help"], expect_in_help: ["--print", "--model"]},
-      install_hint: "Install pi CLI and ensure `pi` is in PATH"
-    },
-    kimi_cli: %Config{
-      name: :kimi_cli,
-      binary: "kimi-cli",
-      default_timeout: 1_800_000,
-      default_model: "kimi-cli",
-      flags: %{
-        model: "--model",
-        cwd: "--work-dir",
-        add_dir: "--add-dir",
-        system_prompt_file: "--agent-file"
-      },
-      prompt_position: :flagged,
-      prompt_flag: "--prompt",
-      prompt_transport: :flagged,
-      system_prompt_transport: :file_flag,
-      cwd_flag: "--work-dir",
-      add_dir_flag: "--add-dir",
-      prefix_args: ["--print", "--output-format", "text", "--final-message-only"],
-      output_mode: :final_message_only,
-      auto_approve_args: ["--yolo"],
-      preflight: %{
-        help_args: ["--help"],
-        expect_in_help: ["--agent-file", "--print", "--work-dir"]
-      },
-      install_hint: "Install Kimi CLI and ensure `kimi-cli` is in PATH"
-    },
-    codex_cli: %Config{
-      name: :codex_cli,
-      binary: "codex",
-      subcommand: "exec",
-      default_timeout: 1_800_000,
-      default_model: "codex-cli",
-      flags: %{
-        model: "--model",
-        cwd: "--cd",
-        add_dir: "--add-dir"
-      },
-      prompt_position: :last,
-      prompt_transport: :last,
-      system_prompt_transport: :inline_fallback,
-      cwd_flag: "--cd",
-      add_dir_flag: "--add-dir",
-      output_mode: :stdout_text,
-      stdin_hack: false,
-      auto_approve_args: ["--full-auto"],
-      sandbox_bypass_args: ["--dangerously-bypass-approvals-and-sandbox"],
-      preflight: %{help_args: ["exec", "--help"], expect_in_help: ["--full-auto", "--add-dir"]},
-      install_hint: "Install with: npm install -g @openai/codex"
-    },
-    gemini_cli: %Config{
-      name: :gemini_cli,
-      binary: "gemini",
-      default_timeout: 1_800_000,
-      default_model: "gemini-cli",
-      flags: %{model: "--model"},
-      prompt_position: :last,
-      prompt_transport: :last,
-      stdin_hack: false,
-      output_mode: :stdout_text,
-      preflight: %{help_args: ["--help"]},
-      install_hint: "Install the Google Cloud CLI with Gemini support"
-    }
-  }
+  @builtins %{}
 
   defstruct [:config]
 
@@ -324,7 +195,10 @@ defmodule LlmCore.LLM.CLIProvider do
 
   def from_config(%Config{} = cfg), do: %__MODULE__{config: cfg}
 
-  @doc "Returns the map of built-in CLI provider configs."
+  @doc """
+  Returns the legacy built-in map (empty since all defaults moved to TOML).
+  Use `list_all_configs/0` to get all known CLI provider configs.
+  """
   @spec builtins() :: %{atom() => Config.t()}
   def builtins, do: @builtins
 
