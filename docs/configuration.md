@@ -98,6 +98,13 @@ auto_approve_args = ["--yes"]         # appended when auto_approve: true
 sandbox_bypass_args = []              # appended when sandbox_bypass: true
 non_interactive_args = ["--batch"]    # appended when non_interactive: true
 
+# System prompt file transform (optional)
+system_prompt_file_transform = "agent_spec_yaml"  # "agent_spec_yaml" or omit
+
+# Output capture (optional)
+output_file_flag = "--output-last-message"  # read response from file instead of stdout
+output_strip_patterns = ["^Session.*$"]     # regex patterns stripped from stdout output
+
 [providers.my_tool.cli.flags]
 model = "--model"
 temperature = "--temp"
@@ -115,17 +122,35 @@ passthrough = true
 cost_tier = "cli"
 ```
 
-**Built-in CLI providers** (`claude_code`, `droid`, `pi_cli`, `kimi_cli`,
-`codex_cli`, `gemini_cli`) work without any TOML entry. To override a built-in,
-define a `[providers.<name>]` block with the same ID and `type = "cli"` — the
-TOML definition replaces the built-in completely.
+**Default CLI providers** (`claude_code`, `droid`, `pi_cli`, `kimi_cli`,
+`codex_cli`, `gemini_cli`) ship in `priv/config/llm_core.toml`. To override
+one, define a `[providers.<name>]` block with the same ID and `type = "cli"` in
+a project or global override — the TOML definition replaces the default.
 
 **Validation rules:**
 - `binary` is required and must be a non-empty string
 - `prompt_position = "flagged"` requires `prompt_flag` to be set
 - Enum fields are validated: `prompt_position`, `prompt_transport`,
-  `system_prompt_transport`, `output_mode`
+  `system_prompt_transport`, `output_mode`, `system_prompt_file_transform`
 - Invalid configs are skipped with a warning (same as module providers)
+
+**System prompt file transforms:**
+
+Some CLIs need the system prompt in a specific format rather than raw markdown.
+Use `system_prompt_file_transform` to declare the preparation step:
+
+- `"agent_spec_yaml"` — generates a YAML agent spec with a sibling `system.md`.
+  Used by Kimi CLI's `--agent-file`. The caller passes raw system prompt text,
+  and the runtime writes `agent.yaml` + `system.md` to a temp directory.
+
+**Output capture and normalization:**
+
+- `output_file_flag` — when set, the runtime creates a temp file, passes it via
+  this flag, and reads the final response from the file instead of stdout. Used
+  by Codex CLI's `--output-last-message` to bypass session noise.
+- `output_strip_patterns` — list of regex patterns applied to stdout output
+  before building the response. Strips banners, progress indicators, and
+  other non-content noise. Only applies to stdout-based output.
 
 **Availability:** A CLI provider is "available" when `enabled = true` and the
 binary is found in `PATH`. No API key or module loading required.

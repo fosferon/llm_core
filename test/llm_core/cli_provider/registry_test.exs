@@ -9,6 +9,10 @@ defmodule LlmCore.CLIProvider.RegistryTest do
       start_supervised!(Store)
     end
 
+    # Load the default TOML config so CLI providers are available.
+    # Since @builtins is empty, CLI providers come from priv/config/llm_core.toml.
+    Loader.reload_providers([])
+
     :ok
   end
 

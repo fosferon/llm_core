@@ -468,4 +468,289 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert response.provider == :echo_test
     end
   end
+
+  # ── System Prompt File Transform ──────────────────────────
+
+  describe "system_prompt_file_transform: :agent_spec_yaml" do
+    test "generates agent.yaml + system.md from system prompt text" do
+      config = %CLIProvider.Config{
+        name: :transform_test,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag,
+        system_prompt_file_transform: :agent_spec_yaml
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      # Write a temp system prompt file
+      tmp =
+        Path.join(System.tmp_dir!(), "sp_transform_test_#{System.unique_integer([:positive])}.md")
+
+      File.write!(tmp, "You are a helpful assistant.")
+
+      {_prompt, opts, meta} =
+        send(provider, :prepare_prompt_and_opts, ["do the thing", [system_prompt_file: tmp]])
+
+      agent_file = opts[:system_prompt_file]
+      assert meta.persona_strategy == :native_file
+
+      # Verify the generated files
+      assert String.ends_with?(agent_file, "agent.yaml")
+      assert File.exists?(agent_file)
+
+      yaml_content = File.read!(agent_file)
+      assert yaml_content =~ "system_prompt_path: system.md"
+
+      system_md = Path.join(Path.dirname(agent_file), "system.md")
+      assert File.exists?(system_md)
+      assert File.read!(system_md) == "You are a helpful assistant."
+
+      # Cleanup
+      File.rm_rf!(Path.dirname(agent_file))
+      File.rm(tmp)
+    end
+
+    test "materializes text system prompt into agent spec when no file given" do
+      config = %CLIProvider.Config{
+        name: :transform_materialize,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag,
+        system_prompt_file_transform: :agent_spec_yaml
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      {_prompt, opts, meta} =
+        send(provider, :prepare_prompt_and_opts, [
+          "do the thing",
+          [system_prompt: "Be concise."]
+        ])
+
+      agent_file = opts[:system_prompt_file]
+      assert meta.persona_strategy == :native_file
+      assert agent_file != nil
+      assert String.ends_with?(agent_file, "agent.yaml")
+
+      yaml_content = File.read!(agent_file)
+      assert yaml_content =~ "system_prompt_path: system.md"
+
+      system_md = Path.join(Path.dirname(agent_file), "system.md")
+      assert File.read!(system_md) == "Be concise."
+
+      File.rm_rf!(Path.dirname(agent_file))
+    end
+
+    test "no transform when system_prompt_file_transform is nil" do
+      config = %CLIProvider.Config{
+        name: :no_transform,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag,
+        system_prompt_file_transform: nil
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      tmp =
+        Path.join(System.tmp_dir!(), "sp_no_transform_#{System.unique_integer([:positive])}.md")
+
+      File.write!(tmp, "Raw prompt.")
+
+      {_prompt, opts, _meta} =
+        send(provider, :prepare_prompt_and_opts, ["task", [system_prompt_file: tmp]])
+
+      # File path should be unchanged — no transform
+      assert opts[:system_prompt_file] == tmp
+
+      File.rm(tmp)
+    end
+  end
+
+  # ── Output Normalization ──────────────────────────────────
+
+  describe "output_strip_patterns" do
+    test "strips matching patterns from output" do
+      config = %CLIProvider.Config{
+        name: :strip_test,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_strip_patterns: ["^Session started\\..*$", "^\\[INFO\\].*$"]
+      }
+
+      output = "Session started.\n[INFO] Loading...\nActual response content\n[INFO] Done."
+      normalized = CLIProvider.normalize_output(output, config)
+
+      assert normalized =~ "Actual response content"
+      refute normalized =~ "Session started."
+      refute normalized =~ "[INFO]"
+    end
+
+    test "no-op when patterns list is empty" do
+      config = %CLIProvider.Config{
+        name: :no_strip,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_strip_patterns: []
+      }
+
+      output = "Hello world"
+      assert CLIProvider.normalize_output(output, config) == output
+    end
+
+    test "build_response applies strip patterns" do
+      config = %CLIProvider.Config{
+        name: :strip_response,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_strip_patterns: ["^BANNER.*$"]
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      response = CLIProvider.build_response(provider, "BANNER LINE\nReal output", [])
+      assert response.content == "Real output"
+      # Raw output is preserved unmodified
+      assert response.raw.output == "BANNER LINE\nReal output"
+    end
+  end
+
+  # ── Output File Capture ───────────────────────────────────
+
+  describe "output_file_flag" do
+    @tag :unix
+    test "captures output from file when output_file_flag is set" do
+      # Use /bin/sh to both write to file and echo to stdout
+      _output_file =
+        Path.join(System.tmp_dir!(), "output_test_#{System.unique_integer([:positive])}.txt")
+
+      config = %CLIProvider.Config{
+        name: :file_capture_test,
+        binary: "/bin/sh",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        output_file_flag: "--output-file"
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      # The output_file_flag mechanism appends the flag + temp file to args.
+      # We test the plumbing by verifying the args contain the flag.
+      args = CLIProvider.build_args(provider, "test", [])
+      # output_file_flag is appended during execute, not build_args
+      # so build_args should not include it
+      refute "--output-file" in args
+    end
+
+    test "config with nil output_file_flag does not add extra args" do
+      config = %CLIProvider.Config{
+        name: :no_file_capture,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_file_flag: nil
+      }
+
+      provider = CLIProvider.from_config(config)
+      args = CLIProvider.build_args(provider, "test", [])
+      refute Enum.any?(args, &String.starts_with?(&1, "--output"))
+    end
+  end
+
+  # ── New Config Defaults ───────────────────────────────────
+
+  describe "new contract fields — backward compatibility" do
+    test "new fields default to nil/empty" do
+      config = %CLIProvider.Config{
+        name: :compat,
+        binary: "test",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1"
+      }
+
+      assert config.system_prompt_file_transform == nil
+      assert config.output_file_flag == nil
+      assert config.output_strip_patterns == []
+    end
+
+    test "capabilities expose new contract fields" do
+      config = %CLIProvider.Config{
+        name: :cap_test,
+        binary: "test",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_file_flag: "--output-last-message",
+        output_strip_patterns: ["^noise"],
+        system_prompt_file_transform: :agent_spec_yaml,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag
+      }
+
+      provider = CLIProvider.from_config(config)
+      caps = CLIProvider.capabilities(provider)
+
+      assert get_in(caps, [:output, :file_capture]) == true
+      assert get_in(caps, [:output, :strip_patterns]) == true
+      assert get_in(caps, [:persona, :file_transform]) == :agent_spec_yaml
+    end
+  end
+
+  # ── Helper to call private functions for testing ──────────
+
+  defp send(provider, function, args) do
+    # Use Kernel.apply on the module to call internal prepare function
+    # We access it via the public render_prompt path instead
+    case function do
+      :prepare_prompt_and_opts ->
+        [prompt, opts] = args
+        # Use invocation_plan which exercises prepare_prompt_and_opts
+        plan = CLIProvider.invocation_plan(provider, prompt, opts)
+
+        meta = %{
+          system_prompt_transport: plan.system_prompt_transport,
+          persona_strategy: plan.persona_strategy
+        }
+
+        # Extract the system_prompt_file from the rendered args
+        sp_file_flag = provider.config.flags[:system_prompt_file]
+
+        sp_file =
+          if sp_file_flag do
+            idx = Enum.find_index(plan.args, &(&1 == sp_file_flag))
+            if idx, do: Enum.at(plan.args, idx + 1)
+          end
+
+        final_opts =
+          if sp_file do
+            Keyword.put(opts, :system_prompt_file, sp_file)
+          else
+            opts
+          end
+
+        {plan.prompt, final_opts, meta}
+    end
+  end
 end

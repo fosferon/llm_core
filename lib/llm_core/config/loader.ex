@@ -328,6 +328,7 @@ defmodule LlmCore.Config.Loader do
   @valid_prompt_transports ~w(last flagged stdin)
   @valid_system_prompt_transports ~w(flag file_flag inline_fallback unsupported)
   @valid_output_modes ~w(stdout_text final_message_only json)
+  @valid_file_transforms ~w(agent_spec_yaml)
 
   defp build_cli_config(id, attrs) when is_map(attrs) do
     binary = Map.get(attrs, "binary")
@@ -362,7 +363,11 @@ defmodule LlmCore.Config.Loader do
             non_interactive_args: List.wrap(Map.get(attrs, "non_interactive_args", [])),
             auto_approve_args: List.wrap(Map.get(attrs, "auto_approve_args", [])),
             sandbox_bypass_args: List.wrap(Map.get(attrs, "sandbox_bypass_args", [])),
-            preflight: normalize_cli_preflight(Map.get(attrs, "preflight", %{}))
+            preflight: normalize_cli_preflight(Map.get(attrs, "preflight", %{})),
+            system_prompt_file_transform:
+              safe_to_atom_or_nil(Map.get(attrs, "system_prompt_file_transform")),
+            output_file_flag: blank_to_nil(Map.get(attrs, "output_file_flag")),
+            output_strip_patterns: List.wrap(Map.get(attrs, "output_strip_patterns", []))
           }
 
           {:ok, config}
@@ -378,7 +383,9 @@ defmodule LlmCore.Config.Loader do
       {"prompt_transport", Map.get(attrs, "prompt_transport"), @valid_prompt_transports},
       {"system_prompt_transport", Map.get(attrs, "system_prompt_transport"),
        @valid_system_prompt_transports},
-      {"output_mode", Map.get(attrs, "output_mode"), @valid_output_modes}
+      {"output_mode", Map.get(attrs, "output_mode"), @valid_output_modes},
+      {"system_prompt_file_transform", Map.get(attrs, "system_prompt_file_transform"),
+       @valid_file_transforms}
     ]
 
     Enum.reduce_while(checks, :ok, fn {field, value, valid}, :ok ->

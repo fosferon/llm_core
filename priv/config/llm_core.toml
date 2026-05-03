@@ -267,6 +267,10 @@ prompt_position = "flagged"
 prompt_flag = "--prompt"
 prompt_transport = "flagged"
 system_prompt_transport = "file_flag"
+# Kimi's --agent-file expects a YAML agent spec, not raw markdown.
+# This transform generates agent.yaml + sibling system.md from the
+# caller's system prompt text.
+system_prompt_file_transform = "agent_spec_yaml"
 cwd_flag = "--work-dir"
 add_dir_flag = "--add-dir"
 output_mode = "final_message_only"
@@ -311,6 +315,9 @@ cwd_flag = "--cd"
 add_dir_flag = "--add-dir"
 output_mode = "stdout_text"
 stdin_hack = false
+# Codex supports writing the final response to a file, bypassing
+# stdout session noise (banners, progress indicators, etc.)
+output_file_flag = "--output-last-message"
 auto_approve_args = ["--full-auto"]
 sandbox_bypass_args = ["--dangerously-bypass-approvals-and-sandbox"]
 install_hint = "Install with: npm install -g @openai/codex"

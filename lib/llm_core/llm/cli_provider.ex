@@ -6,7 +6,7 @@ defmodule LlmCore.LLM.CLIProvider.Config do
   makes `CLIProvider` universal: a new CLI client is just a config entry,
   no Elixir code needed.
 
-  ## Fields
+  ## Core Fields
 
     * `name` — atom identifying this provider (e.g. `:claude_code`, `:droid`)
     * `binary` — executable name (must be in PATH)
@@ -29,6 +29,30 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `auto_approve_args` — optional args enabling unattended execution
     * `sandbox_bypass_args` — optional args for stronger sandbox/approval bypass
     * `preflight` — optional declarative preflight configuration
+
+  ## System Prompt File Transform
+
+    * `system_prompt_file_transform` — declares how to prepare the system prompt
+      file before passing it to the CLI. When nil, the file is passed as-is
+      (backward-compatible default).
+
+      Supported transforms:
+      - `:agent_spec_yaml` — generates a YAML agent spec file plus a sibling
+        `system.md` containing the raw prompt. The YAML references the sibling
+        via a `system_prompt_path` field. Used by Kimi CLI's `--agent-file`.
+
+      The transform receives the raw system prompt text and a temp directory,
+      and returns the path to pass to the CLI flag.
+
+  ## Output Capture
+
+    * `output_file_flag` — CLI flag that writes the final response to a file
+      (e.g. `"--output-last-message"` for Codex). When set, the runtime creates
+      a temp file, passes it via this flag, and reads the response from the file
+      instead of stdout.
+    * `output_strip_patterns` — list of regex pattern strings applied to stdout
+      output to strip banners, session noise, or decorators before building the
+      response. Applied only to stdout-based output (not file capture).
   """
 
   @type t :: %__MODULE__{
@@ -52,7 +76,10 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           non_interactive_args: [String.t()],
           auto_approve_args: [String.t()],
           sandbox_bypass_args: [String.t()],
-          preflight: map()
+          preflight: map(),
+          system_prompt_file_transform: :agent_spec_yaml | nil,
+          output_file_flag: String.t() | nil,
+          output_strip_patterns: [String.t()]
         }
 
   @enforce_keys [:name, :binary]
@@ -67,6 +94,8 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     :cwd_flag,
     :add_dir_flag,
     :output_mode,
+    :system_prompt_file_transform,
+    :output_file_flag,
     provider_type: :cli,
     default_timeout: 1_800_000,
     default_model: "cli-default",
@@ -77,7 +106,8 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     non_interactive_args: [],
     auto_approve_args: [],
     sandbox_bypass_args: [],
-    preflight: %{}
+    preflight: %{},
+    output_strip_patterns: []
   ]
 end
 
@@ -343,10 +373,15 @@ defmodule LlmCore.LLM.CLIProvider do
         auto_approve: cfg.auto_approve_args != [],
         sandbox_bypass: cfg.sandbox_bypass_args != []
       },
-      output: %{mode: effective_output_mode(cfg)},
+      output: %{
+        mode: effective_output_mode(cfg),
+        file_capture: is_binary(cfg.output_file_flag),
+        strip_patterns: cfg.output_strip_patterns != []
+      },
       persona: %{
         native_file: has_flag?(cfg, :system_prompt_file),
-        inline_fallback: effective_system_prompt_transport(cfg) == :inline_fallback
+        inline_fallback: effective_system_prompt_transport(cfg) == :inline_fallback,
+        file_transform: cfg.system_prompt_file_transform
       },
       detached_stdin: cfg.stdin_hack
     }
@@ -519,11 +554,13 @@ defmodule LlmCore.LLM.CLIProvider do
 
   # ── Response/Error Building (public for testing) ──────────
 
-  @doc "Builds a Response struct from CLI output."
+  @doc "Builds a Response struct from CLI output, applying any configured normalization."
   @spec build_response(t(), String.t(), keyword()) :: Response.t()
   def build_response(%__MODULE__{config: cfg}, output, opts) do
+    normalized = normalize_output(output, cfg)
+
     Response.new(
-      content: String.trim(output),
+      content: String.trim(normalized),
       provider: cfg.name,
       model: Keyword.get(opts, :model, cfg.default_model),
       raw: %{output: output},
@@ -580,24 +617,35 @@ defmodule LlmCore.LLM.CLIProvider do
 
   defp execute(%__MODULE__{config: cfg} = provider, prompt, opts) do
     timeout = Keyword.get(opts, :timeout, cfg.default_timeout)
-    {executable, args} = build_invocation(provider, prompt, opts)
+    {executable, base_args} = build_invocation(provider, prompt, opts)
     execution_id = Keyword.get(opts, :execution_id)
+
+    # Output file capture: if configured, create a temp file and append the flag
+    {output_file, output_file_args} = maybe_setup_output_file(cfg)
+    args = base_args ++ output_file_args
 
     case run_port(executable, args, timeout, execution_id) do
       {:ok, output, 0} ->
-        {:ok, build_response(provider, IO.iodata_to_binary(output), opts)}
+        raw_output = IO.iodata_to_binary(output)
+        final_output = read_output_file(output_file, raw_output)
+        {:ok, build_response(provider, final_output, opts)}
 
       {:ok, output, exit_code} ->
+        if output_file, do: File.rm(output_file)
+
         {:error,
          build_error(provider, {:exit_code, exit_code}, output: IO.iodata_to_binary(output))}
 
       {:error, :timeout} ->
+        if output_file, do: File.rm(output_file)
         {:error, build_error(provider, :timeout, opts)}
 
       {:error, :not_found} ->
+        if output_file, do: File.rm(output_file)
         {:error, build_error(provider, :not_installed, opts)}
 
       {:error, err} ->
+        if output_file, do: File.rm(output_file)
         {:error, build_error(provider, {:exec_error, err}, opts)}
     end
   end
@@ -641,6 +689,14 @@ defmodule LlmCore.LLM.CLIProvider do
         }
 
       has_flag?(cfg, :system_prompt_file) and Keyword.has_key?(opts, :system_prompt_file) ->
+        opts = maybe_transform_system_prompt_file(cfg, opts)
+        {prompt, opts, %{system_prompt_transport: :file_flag, persona_strategy: :native_file}}
+
+      has_flag?(cfg, :system_prompt_file) and cfg.system_prompt_file_transform != nil and
+        is_binary(system_prompt_text) and system_prompt_text != "" ->
+        # Provider has a file transform and caller supplied text but no file.
+        # Write the text to a temp file, apply the transform, and pass the result.
+        opts = materialize_and_transform_system_prompt(cfg, system_prompt_text, opts)
         {prompt, opts, %{system_prompt_transport: :file_flag, persona_strategy: :native_file}}
 
       has_flag?(cfg, :system_prompt) and Keyword.has_key?(opts, :system_prompt) ->
@@ -702,6 +758,106 @@ defmodule LlmCore.LLM.CLIProvider do
   defp effective_output_mode(%Config{}), do: :stdout_text
 
   defp has_flag?(%Config{flags: flags}, key), do: is_binary(Map.get(flags, key))
+
+  # ── System Prompt File Transform ──────────────────────────
+
+  defp maybe_transform_system_prompt_file(%Config{system_prompt_file_transform: nil}, opts),
+    do: opts
+
+  defp maybe_transform_system_prompt_file(%Config{system_prompt_file_transform: transform}, opts) do
+    file_path = opts[:system_prompt_file]
+
+    if is_binary(file_path) and File.exists?(file_path) do
+      case File.read(file_path) do
+        {:ok, content} ->
+          transformed_path = apply_file_transform(transform, content)
+          Keyword.put(opts, :system_prompt_file, transformed_path)
+
+        _ ->
+          opts
+      end
+    else
+      opts
+    end
+  end
+
+  defp materialize_and_transform_system_prompt(
+         %Config{system_prompt_file_transform: transform},
+         text,
+         opts
+       ) do
+    transformed_path = apply_file_transform(transform, text)
+
+    opts
+    |> Keyword.delete(:system_prompt)
+    |> Keyword.put(:system_prompt_file, transformed_path)
+  end
+
+  defp apply_file_transform(:agent_spec_yaml, content) do
+    dir =
+      Path.join(System.tmp_dir!(), "llm_core_agent_spec_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(dir)
+
+    system_md_path = Path.join(dir, "system.md")
+    agent_yaml_path = Path.join(dir, "agent.yaml")
+
+    File.write!(system_md_path, content)
+
+    yaml_content = """
+    name: llm_core_agent
+    system_prompt_path: system.md
+    """
+
+    File.write!(agent_yaml_path, yaml_content)
+
+    agent_yaml_path
+  end
+
+  defp apply_file_transform(_unknown, _content), do: nil
+
+  # ── Output File Capture ───────────────────────────────────
+
+  defp maybe_setup_output_file(%Config{output_file_flag: nil}), do: {nil, []}
+
+  defp maybe_setup_output_file(%Config{output_file_flag: flag}) when is_binary(flag) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "llm_core_output_#{System.unique_integer([:positive])}.txt"
+      )
+
+    {path, [flag, path]}
+  end
+
+  defp read_output_file(nil, stdout_output), do: stdout_output
+
+  defp read_output_file(path, stdout_output) do
+    case File.read(path) do
+      {:ok, content} when content != "" ->
+        File.rm(path)
+        content
+
+      _ ->
+        File.rm(path)
+        stdout_output
+    end
+  end
+
+  # ── Output Normalization ──────────────────────────────────
+
+  @doc false
+  def normalize_output(output, %Config{output_strip_patterns: patterns})
+      when is_list(patterns) and patterns != [] do
+    Enum.reduce(patterns, output, fn pattern, acc ->
+      case Regex.compile(pattern, [:multiline]) do
+        {:ok, regex} -> Regex.replace(regex, acc, "")
+        _ -> acc
+      end
+    end)
+  end
+
+  def normalize_output(output, _config), do: output
 
   defp maybe_append_profile_args(args, profile_args, true) when is_list(profile_args),
     do: args ++ profile_args

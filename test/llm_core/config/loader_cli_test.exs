@@ -310,6 +310,111 @@ defmodule LlmCore.Config.LoaderCLITest do
     end
   end
 
+  describe "CLI provider contract extensions" do
+    test "loads system_prompt_file_transform from TOML" do
+      config_path = temp_path("cli_transform.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.transform_test]
+      type = "cli"
+      enabled = true
+
+      [providers.transform_test.cli]
+      binary = "echo"
+      system_prompt_file_transform = "agent_spec_yaml"
+      system_prompt_transport = "file_flag"
+
+      [providers.transform_test.cli.flags]
+      system_prompt_file = "--agent-file"
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      assert Map.has_key?(providers, "transform_test")
+
+      assert providers["transform_test"].cli_config.system_prompt_file_transform ==
+               :agent_spec_yaml
+    end
+
+    test "rejects invalid system_prompt_file_transform" do
+      config_path = temp_path("cli_bad_transform.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.bad_transform]
+      type = "cli"
+      enabled = true
+
+      [providers.bad_transform.cli]
+      binary = "echo"
+      system_prompt_file_transform = "invalid_transform"
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      refute Map.has_key?(providers, "bad_transform")
+    end
+
+    test "loads output_file_flag from TOML" do
+      config_path = temp_path("cli_output_file.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.output_file_test]
+      type = "cli"
+      enabled = true
+
+      [providers.output_file_test.cli]
+      binary = "echo"
+      output_file_flag = "--output-last-message"
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      assert Map.has_key?(providers, "output_file_test")
+
+      assert providers["output_file_test"].cli_config.output_file_flag ==
+               "--output-last-message"
+    end
+
+    test "loads output_strip_patterns from TOML" do
+      config_path = temp_path("cli_strip.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.strip_test]
+      type = "cli"
+      enabled = true
+
+      [providers.strip_test.cli]
+      binary = "echo"
+      output_strip_patterns = ["^Session.*$", "^\\\\[INFO\\\\].*$"]
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      assert Map.has_key?(providers, "strip_test")
+      assert length(providers["strip_test"].cli_config.output_strip_patterns) == 2
+    end
+
+    test "new fields default to nil/empty when not specified" do
+      config_path = temp_path("cli_defaults.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.defaults_test]
+      type = "cli"
+      enabled = true
+
+      [providers.defaults_test.cli]
+      binary = "echo"
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      cfg = providers["defaults_test"].cli_config
+      assert cfg.system_prompt_file_transform == nil
+      assert cfg.output_file_flag == nil
+      assert cfg.output_strip_patterns == []
+    end
+  end
+
   describe "CLI provider visibility in Provider.Registry" do
     test "CLI providers appear in Provider.Registry.all/0" do
       config_path = temp_path("cli_registry.toml")
