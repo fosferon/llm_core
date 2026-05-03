@@ -277,6 +277,9 @@ add_dir_flag = "--add-dir"
 output_mode = "final_message_only"
 stdin_hack = false
 prefix_args = ["--print", "--output-format", "text", "--final-message-only"]
+# Kimi appends a resumable session footer even in final-message mode.
+# Strip it at the provider layer so downstream callers see only the final reply.
+output_strip_patterns = ["\\n{2,}To resume this session: kimi -r [^\\n]+\\s*$"]
 auto_approve_args = ["--yolo"]
 install_hint = "Install Kimi CLI and ensure `kimi-cli` is in PATH"
 
