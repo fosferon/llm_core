@@ -472,7 +472,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
   # ── System Prompt File Transform ──────────────────────────
 
   describe "system_prompt_file_transform: :agent_spec_yaml" do
-    test "generates agent.yaml + system.md from system prompt text" do
+    test "generates correct nested Kimi-style agent spec" do
       config = %CLIProvider.Config{
         name: :transform_test,
         binary: "cat",
@@ -487,7 +487,6 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       provider = CLIProvider.from_config(config)
 
-      # Write a temp system prompt file
       tmp =
         Path.join(System.tmp_dir!(), "sp_transform_test_#{System.unique_integer([:positive])}.md")
 
@@ -498,21 +497,136 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       agent_file = opts[:system_prompt_file]
       assert meta.persona_strategy == :native_file
-
-      # Verify the generated files
       assert String.ends_with?(agent_file, "agent.yaml")
-      assert File.exists?(agent_file)
 
       yaml_content = File.read!(agent_file)
-      assert yaml_content =~ "system_prompt_path: system.md"
+      # Verify nested structure with version + agent block
+      assert yaml_content =~ "version: 1"
+      assert yaml_content =~ "agent:"
+      assert yaml_content =~ "  extend: default"
+      assert yaml_content =~ "  name: llm_core_agent"
+      assert yaml_content =~ "  system_prompt_path: ./system.md"
 
       system_md = Path.join(Path.dirname(agent_file), "system.md")
       assert File.exists?(system_md)
       assert File.read!(system_md) == "You are a helpful assistant."
 
-      # Cleanup
       File.rm_rf!(Path.dirname(agent_file))
       File.rm(tmp)
+    end
+
+    test "agent_name from opts takes precedence" do
+      config = %CLIProvider.Config{
+        name: :transform_name,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag,
+        system_prompt_file_transform: :agent_spec_yaml,
+        file_transform_defaults: %{"name" => "config-agent"}
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      {_prompt, opts, _meta} =
+        send(provider, :prepare_prompt_and_opts, [
+          "task",
+          [system_prompt: "Be concise.", agent_name: "dispatch-agent"]
+        ])
+
+      yaml_content = File.read!(opts[:system_prompt_file])
+      # Opts take precedence over config defaults
+      assert yaml_content =~ "  name: dispatch-agent"
+      refute yaml_content =~ "config-agent"
+
+      File.rm_rf!(Path.dirname(opts[:system_prompt_file]))
+    end
+
+    test "agent_name falls back to file_transform_defaults" do
+      config = %CLIProvider.Config{
+        name: :transform_defaults,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag,
+        system_prompt_file_transform: :agent_spec_yaml,
+        file_transform_defaults: %{"name" => "my-kimi-agent", "version" => 2, "extend" => "okabe"}
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      {_prompt, opts, _meta} =
+        send(provider, :prepare_prompt_and_opts, [
+          "task",
+          [system_prompt: "Be concise."]
+        ])
+
+      yaml_content = File.read!(opts[:system_prompt_file])
+      assert yaml_content =~ "version: 2"
+      assert yaml_content =~ "  extend: okabe"
+      assert yaml_content =~ "  name: my-kimi-agent"
+
+      File.rm_rf!(Path.dirname(opts[:system_prompt_file]))
+    end
+
+    test "model is included when passed via opts" do
+      config = %CLIProvider.Config{
+        name: :transform_model,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag,
+        system_prompt_file_transform: :agent_spec_yaml
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      {_prompt, opts, _meta} =
+        send(provider, :prepare_prompt_and_opts, [
+          "task",
+          [system_prompt: "Be concise.", model: "k2-0235"]
+        ])
+
+      yaml_content = File.read!(opts[:system_prompt_file])
+      assert yaml_content =~ "  model: k2-0235"
+
+      File.rm_rf!(Path.dirname(opts[:system_prompt_file]))
+    end
+
+    test "model is omitted when not available" do
+      config = %CLIProvider.Config{
+        name: :transform_no_model,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_transport: :file_flag,
+        system_prompt_file_transform: :agent_spec_yaml
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      {_prompt, opts, _meta} =
+        send(provider, :prepare_prompt_and_opts, [
+          "task",
+          [system_prompt: "Be concise."]
+        ])
+
+      yaml_content = File.read!(opts[:system_prompt_file])
+      refute yaml_content =~ "model:"
+
+      File.rm_rf!(Path.dirname(opts[:system_prompt_file]))
     end
 
     test "materializes text system prompt into agent spec when no file given" do
@@ -538,11 +652,12 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       agent_file = opts[:system_prompt_file]
       assert meta.persona_strategy == :native_file
-      assert agent_file != nil
       assert String.ends_with?(agent_file, "agent.yaml")
 
       yaml_content = File.read!(agent_file)
-      assert yaml_content =~ "system_prompt_path: system.md"
+      assert yaml_content =~ "version: 1"
+      assert yaml_content =~ "agent:"
+      assert yaml_content =~ "  system_prompt_path: ./system.md"
 
       system_md = Path.join(Path.dirname(agent_file), "system.md")
       assert File.read!(system_md) == "Be concise."
@@ -572,7 +687,6 @@ defmodule LlmCore.LLM.CLIProviderTest do
       {_prompt, opts, _meta} =
         send(provider, :prepare_prompt_and_opts, ["task", [system_prompt_file: tmp]])
 
-      # File path should be unchanged — no transform
       assert opts[:system_prompt_file] == tmp
 
       File.rm(tmp)

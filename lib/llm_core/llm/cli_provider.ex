@@ -38,11 +38,25 @@ defmodule LlmCore.LLM.CLIProvider.Config do
 
       Supported transforms:
       - `:agent_spec_yaml` — generates a YAML agent spec file plus a sibling
-        `system.md` containing the raw prompt. The YAML references the sibling
-        via a `system_prompt_path` field. Used by Kimi CLI's `--agent-file`.
+        `system.md` containing the raw prompt. Used by Kimi CLI's `--agent-file`.
+        Generates the nested structure Kimi expects:
 
-      The transform receives the raw system prompt text and a temp directory,
-      and returns the path to pass to the CLI flag.
+            version: 1
+            agent:
+              extend: default
+              name: <agent_name>
+              system_prompt_path: ./system.md
+              model: <model>    # when available
+
+      The transform resolves field values with this precedence:
+        1. Dispatch opts (`:agent_name`, `:model`) — caller-supplied
+        2. `file_transform_defaults` (TOML config) — provider-level defaults
+        3. Built-in fallbacks (name: "llm_core_agent", version: 1, extend: "default")
+
+    * `file_transform_defaults` — optional map of default values for the transform.
+      Providers declare these in TOML under `[providers.<id>.cli.file_transform_defaults]`.
+      Keys like `version`, `extend`, `name`, `model` are passed to the transform
+      as fallback context.
 
   ## Output Capture
 
@@ -78,6 +92,7 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           sandbox_bypass_args: [String.t()],
           preflight: map(),
           system_prompt_file_transform: :agent_spec_yaml | nil,
+          file_transform_defaults: map(),
           output_file_flag: String.t() | nil,
           output_strip_patterns: [String.t()]
         }
@@ -107,6 +122,7 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     auto_approve_args: [],
     sandbox_bypass_args: [],
     preflight: %{},
+    file_transform_defaults: %{},
     output_strip_patterns: []
   ]
 end
@@ -760,17 +776,26 @@ defmodule LlmCore.LLM.CLIProvider do
   defp has_flag?(%Config{flags: flags}, key), do: is_binary(Map.get(flags, key))
 
   # ── System Prompt File Transform ──────────────────────────
+  #
+  # Transforms receive a context map built from three layers (later wins):
+  #   1. Built-in fallbacks (version: 1, extend: "default", name: "llm_core_agent")
+  #   2. file_transform_defaults from TOML config
+  #   3. Dispatch opts (:agent_name, :model) from the caller
 
   defp maybe_transform_system_prompt_file(%Config{system_prompt_file_transform: nil}, opts),
     do: opts
 
-  defp maybe_transform_system_prompt_file(%Config{system_prompt_file_transform: transform}, opts) do
+  defp maybe_transform_system_prompt_file(
+         %Config{system_prompt_file_transform: transform} = cfg,
+         opts
+       ) do
     file_path = opts[:system_prompt_file]
 
     if is_binary(file_path) and File.exists?(file_path) do
       case File.read(file_path) do
         {:ok, content} ->
-          transformed_path = apply_file_transform(transform, content)
+          context = build_transform_context(cfg, opts)
+          transformed_path = apply_file_transform(transform, content, context)
           Keyword.put(opts, :system_prompt_file, transformed_path)
 
         _ ->
@@ -782,18 +807,35 @@ defmodule LlmCore.LLM.CLIProvider do
   end
 
   defp materialize_and_transform_system_prompt(
-         %Config{system_prompt_file_transform: transform},
+         %Config{system_prompt_file_transform: transform} = cfg,
          text,
          opts
        ) do
-    transformed_path = apply_file_transform(transform, text)
+    context = build_transform_context(cfg, opts)
+    transformed_path = apply_file_transform(transform, text, context)
 
     opts
     |> Keyword.delete(:system_prompt)
     |> Keyword.put(:system_prompt_file, transformed_path)
   end
 
-  defp apply_file_transform(:agent_spec_yaml, content) do
+  defp build_transform_context(%Config{file_transform_defaults: defaults}, opts) do
+    defaults = defaults || %{}
+
+    %{
+      agent_name:
+        Keyword.get(opts, :agent_name) ||
+          defaults["name"] ||
+          "llm_core_agent",
+      model:
+        Keyword.get(opts, :model) ||
+          defaults["model"],
+      version: defaults["version"] || 1,
+      extend: defaults["extend"] || "default"
+    }
+  end
+
+  defp apply_file_transform(:agent_spec_yaml, content, context) do
     dir =
       Path.join(System.tmp_dir!(), "llm_core_agent_spec_#{System.unique_integer([:positive])}")
 
@@ -804,17 +846,22 @@ defmodule LlmCore.LLM.CLIProvider do
 
     File.write!(system_md_path, content)
 
-    yaml_content = """
-    name: llm_core_agent
-    system_prompt_path: system.md
-    """
+    model_line =
+      if context[:model] do
+        "\n  model: #{context[:model]}"
+      else
+        ""
+      end
+
+    yaml_content =
+      "version: #{context[:version]}\nagent:\n  extend: #{context[:extend]}\n  name: #{context[:agent_name]}\n  system_prompt_path: ./system.md#{model_line}\n"
 
     File.write!(agent_yaml_path, yaml_content)
 
     agent_yaml_path
   end
 
-  defp apply_file_transform(_unknown, _content), do: nil
+  defp apply_file_transform(_unknown, _content, _context), do: nil
 
   # ── Output File Capture ───────────────────────────────────
 

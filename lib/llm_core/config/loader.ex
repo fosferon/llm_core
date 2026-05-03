@@ -366,6 +366,8 @@ defmodule LlmCore.Config.Loader do
             preflight: normalize_cli_preflight(Map.get(attrs, "preflight", %{})),
             system_prompt_file_transform:
               safe_to_atom_or_nil(Map.get(attrs, "system_prompt_file_transform")),
+            file_transform_defaults:
+              normalize_file_transform_defaults(Map.get(attrs, "file_transform_defaults", %{})),
             output_file_flag: blank_to_nil(Map.get(attrs, "output_file_flag")),
             output_strip_patterns: List.wrap(Map.get(attrs, "output_strip_patterns", []))
           }
@@ -424,6 +426,12 @@ defmodule LlmCore.Config.Loader do
   end
 
   defp normalize_cli_preflight(_), do: %{}
+
+  defp normalize_file_transform_defaults(defaults) when is_map(defaults) do
+    Map.new(defaults, fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp normalize_file_transform_defaults(_), do: %{}
 
   defp maybe_put_list(map, _key, nil), do: map
   defp maybe_put_list(map, key, list) when is_list(list), do: Map.put(map, key, list)

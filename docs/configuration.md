@@ -101,6 +101,11 @@ non_interactive_args = ["--batch"]    # appended when non_interactive: true
 # System prompt file transform (optional)
 system_prompt_file_transform = "agent_spec_yaml"  # "agent_spec_yaml" or omit
 
+# Default values for the file transform (optional)
+[providers.my_tool.cli.file_transform_defaults]
+version = 1
+extend = "default"
+
 # Output capture (optional)
 output_file_flag = "--output-last-message"  # read response from file instead of stdout
 output_strip_patterns = ["^Session.*$"]     # regex patterns stripped from stdout output
@@ -139,9 +144,25 @@ a project or global override — the TOML definition replaces the default.
 Some CLIs need the system prompt in a specific format rather than raw markdown.
 Use `system_prompt_file_transform` to declare the preparation step:
 
-- `"agent_spec_yaml"` — generates a YAML agent spec with a sibling `system.md`.
-  Used by Kimi CLI's `--agent-file`. The caller passes raw system prompt text,
-  and the runtime writes `agent.yaml` + `system.md` to a temp directory.
+- `"agent_spec_yaml"` — generates a nested YAML agent spec with a sibling
+  `system.md`. Used by Kimi CLI's `--agent-file`. Generates:
+
+  ```yaml
+  version: 1
+  agent:
+    extend: default
+    name: <agent_name>
+    system_prompt_path: ./system.md
+    model: <model>    # when available
+  ```
+
+  Field values resolve with this precedence:
+  1. **Dispatch opts** — `:agent_name`, `:model` passed by the caller
+  2. **`file_transform_defaults`** — provider-level TOML defaults
+  3. **Built-in fallbacks** — `name: "llm_core_agent"`, `version: 1`, `extend: "default"`
+
+  Consumers like gc_daemon should pass `:agent_name` and `:model` as opts
+  when dispatching to CLI providers that use this transform.
 
 **Output capture and normalization:**
 

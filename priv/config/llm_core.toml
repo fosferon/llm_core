@@ -269,7 +269,8 @@ prompt_transport = "flagged"
 system_prompt_transport = "file_flag"
 # Kimi's --agent-file expects a YAML agent spec, not raw markdown.
 # This transform generates agent.yaml + sibling system.md from the
-# caller's system prompt text.
+# caller's system prompt text. Values resolve as:
+#   dispatch opts > file_transform_defaults > built-in fallbacks
 system_prompt_file_transform = "agent_spec_yaml"
 cwd_flag = "--work-dir"
 add_dir_flag = "--add-dir"
@@ -288,6 +289,10 @@ system_prompt_file = "--agent-file"
 [providers.kimi_cli.cli.preflight]
 help_args = ["--help"]
 expect_in_help = ["--agent-file", "--print", "--work-dir"]
+
+[providers.kimi_cli.cli.file_transform_defaults]
+version = 1
+extend = "default"
 
 [providers.kimi_cli.capabilities]
 streaming = true

@@ -410,8 +410,36 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert {:ok, providers} = Loader.reload_providers(path: config_path)
       cfg = providers["defaults_test"].cli_config
       assert cfg.system_prompt_file_transform == nil
+      assert cfg.file_transform_defaults == %{}
       assert cfg.output_file_flag == nil
       assert cfg.output_strip_patterns == []
+    end
+
+    test "loads file_transform_defaults from TOML" do
+      config_path = temp_path("cli_ftd.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.ftd_test]
+      type = "cli"
+      enabled = true
+
+      [providers.ftd_test.cli]
+      binary = "echo"
+      system_prompt_file_transform = "agent_spec_yaml"
+
+      [providers.ftd_test.cli.file_transform_defaults]
+      version = 1
+      extend = "default"
+      name = "my-agent"
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      assert Map.has_key?(providers, "ftd_test")
+      ftd = providers["ftd_test"].cli_config.file_transform_defaults
+      assert ftd["version"] == 1
+      assert ftd["extend"] == "default"
+      assert ftd["name"] == "my-agent"
     end
   end
 
