@@ -177,7 +177,7 @@ defmodule LlmCore.LLM.CLIProvider do
       {:ok, response} = CLIProvider.send(provider, "hello", model: "v2")
   """
 
-  alias LlmCore.LLM.{Response, Error}
+  alias LlmCore.LLM.{Response, Error, Messages}
   alias LlmCore.LLM.CLIProvider.Config
 
   # CLIProvider is a struct-based provider, not a module-conformant one.
@@ -424,7 +424,8 @@ defmodule LlmCore.LLM.CLIProvider do
   @spec provider_type(t()) :: :cli
   def provider_type(%__MODULE__{}), do: :cli
 
-  @spec send(t(), String.t(), keyword()) :: {:ok, Response.t()} | {:error, Error.t()}
+  @spec send(t(), LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, Response.t()} | {:error, Error.t()}
   def send(provider, prompt, opts \\ []) do
     if not available?(provider) do
       {:error, build_error(provider, :not_installed, opts)}
@@ -433,7 +434,8 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
-  @spec stream(t(), String.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, Error.t()}
+  @spec stream(t(), LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream(provider, prompt, opts \\ []) do
     if not available?(provider) do
       {:error, build_error(provider, :not_installed, opts)}
@@ -445,7 +447,7 @@ defmodule LlmCore.LLM.CLIProvider do
   @doc """
   Returns a normalized invocation plan describing how the provider will run.
   """
-  @spec invocation_plan(t(), String.t(), keyword()) :: map()
+  @spec invocation_plan(t(), LlmCore.LLM.Provider.prompt(), keyword()) :: map()
   def invocation_plan(%__MODULE__{config: cfg} = provider, prompt, opts \\ []) do
     {rendered_prompt, rendered_opts, render_meta} =
       prepare_prompt_and_opts(provider, prompt, opts)
@@ -468,7 +470,7 @@ defmodule LlmCore.LLM.CLIProvider do
   @doc """
   Renders a prompt after applying any declared inline system-prompt fallback.
   """
-  @spec render_prompt(t(), String.t(), keyword()) :: String.t()
+  @spec render_prompt(t(), LlmCore.LLM.Provider.prompt(), keyword()) :: String.t()
   def render_prompt(provider, prompt, opts \\ []) do
     {rendered_prompt, _opts, _meta} = prepare_prompt_and_opts(provider, prompt, opts)
     rendered_prompt
@@ -496,7 +498,7 @@ defmodule LlmCore.LLM.CLIProvider do
   # ── Arg Building (public for testing) ─────────────────────
 
   @doc "Builds the CLI argument list from prompt and opts."
-  @spec build_args(t(), String.t(), keyword()) :: [String.t()]
+  @spec build_args(t(), LlmCore.LLM.Provider.prompt(), keyword()) :: [String.t()]
   def build_args(%__MODULE__{config: cfg} = provider, prompt, opts) do
     {rendered_prompt, rendered_opts, _meta} = prepare_prompt_and_opts(provider, prompt, opts)
     do_build_args(cfg, rendered_prompt, rendered_opts)
@@ -561,7 +563,8 @@ defmodule LlmCore.LLM.CLIProvider do
   # ── Invocation (public for testing) ───────────────────────
 
   @doc "Returns {executable, args} for the CLI invocation."
-  @spec build_invocation(t(), String.t(), keyword()) :: {String.t(), [String.t()]}
+  @spec build_invocation(t(), LlmCore.LLM.Provider.prompt(), keyword()) ::
+          {String.t(), [String.t()]}
   def build_invocation(%__MODULE__{config: cfg} = provider, prompt, opts) do
     {rendered_prompt, rendered_opts, _meta} = prepare_prompt_and_opts(provider, prompt, opts)
     cli_args = do_build_args(cfg, rendered_prompt, rendered_opts)
@@ -693,33 +696,34 @@ defmodule LlmCore.LLM.CLIProvider do
   end
 
   defp prepare_prompt_and_opts(%__MODULE__{config: cfg}, prompt, opts) do
+    cli_prompt = Messages.render_cli_prompt(prompt)
     system_prompt_text = system_prompt_text(opts)
     transport = effective_system_prompt_transport(cfg)
 
     cond do
       transport == :inline_fallback and is_binary(system_prompt_text) and system_prompt_text != "" ->
         {
-          inline_system_prompt(system_prompt_text, prompt),
+          inline_system_prompt(system_prompt_text, cli_prompt),
           opts |> Keyword.delete(:system_prompt) |> Keyword.delete(:system_prompt_file),
           %{system_prompt_transport: :inline_fallback, persona_strategy: :inline_fallback}
         }
 
       has_flag?(cfg, :system_prompt_file) and Keyword.has_key?(opts, :system_prompt_file) ->
         opts = maybe_transform_system_prompt_file(cfg, opts)
-        {prompt, opts, %{system_prompt_transport: :file_flag, persona_strategy: :native_file}}
+        {cli_prompt, opts, %{system_prompt_transport: :file_flag, persona_strategy: :native_file}}
 
       has_flag?(cfg, :system_prompt_file) and cfg.system_prompt_file_transform != nil and
         is_binary(system_prompt_text) and system_prompt_text != "" ->
         # Provider has a file transform and caller supplied text but no file.
         # Write the text to a temp file, apply the transform, and pass the result.
         opts = materialize_and_transform_system_prompt(cfg, system_prompt_text, opts)
-        {prompt, opts, %{system_prompt_transport: :file_flag, persona_strategy: :native_file}}
+        {cli_prompt, opts, %{system_prompt_transport: :file_flag, persona_strategy: :native_file}}
 
       has_flag?(cfg, :system_prompt) and Keyword.has_key?(opts, :system_prompt) ->
-        {prompt, opts, %{system_prompt_transport: :flag, persona_strategy: :native_text}}
+        {cli_prompt, opts, %{system_prompt_transport: :flag, persona_strategy: :native_text}}
 
       true ->
-        {prompt, opts, %{system_prompt_transport: transport, persona_strategy: :none}}
+        {cli_prompt, opts, %{system_prompt_transport: transport, persona_strategy: :none}}
     end
   end
 

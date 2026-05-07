@@ -192,7 +192,7 @@ defmodule LlmCore.LLM.Provider do
   Module-based providers: calls `provider.send(prompt, opts)`.
   Struct-based providers: calls the struct's module `.send(struct, prompt, opts)`.
   """
-  @spec dispatch(module() | struct(), String.t(), keyword()) ::
+  @spec dispatch(module() | struct(), prompt(), keyword()) ::
           {:ok, Response.t()} | {:error, Error.t()}
   def dispatch(provider, prompt, opts \\ [])
 
@@ -211,7 +211,7 @@ defmodule LlmCore.LLM.Provider do
   @doc """
   Dispatches a streaming prompt to the provider.
   """
-  @spec dispatch_stream(module() | struct(), String.t(), keyword()) ::
+  @spec dispatch_stream(module() | struct(), prompt(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def dispatch_stream(provider, prompt, opts \\ [])
 

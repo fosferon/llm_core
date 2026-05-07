@@ -115,6 +115,22 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert args == ["--print", "-p", "hello"]
     end
 
+    test "renders chat prompts for CLI providers" do
+      provider = CLIProvider.from_config(:claude_code)
+
+      args =
+        CLIProvider.build_args(
+          provider,
+          [
+            %{role: :system, content: "You are Alice."},
+            %{role: :user, content: "Hello there"}
+          ],
+          []
+        )
+
+      assert args == ["--print", "-p", "[system] You are Alice.\n[user] Hello there"]
+    end
+
     test "claude_code supports permission-mode and boolean permission bypass flags" do
       provider = CLIProvider.from_config(:claude_code)
 
@@ -466,6 +482,29 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert {:ok, %Response{} = response} = CLIProvider.send(provider, "hello from test")
       assert response.content =~ "hello from test"
       assert response.provider == :echo_test
+    end
+
+    @tag :unix
+    test "accepts chat message prompts" do
+      config = %CLIProvider.Config{
+        name: :echo_chat_test,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "echo-v1",
+        prompt_position: :last
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      prompt = [
+        %{role: :system, content: "You are Alice."},
+        %{role: :user, content: "Hello there"}
+      ]
+
+      assert {:ok, %Response{} = response} = CLIProvider.send(provider, prompt)
+      assert response.content =~ "[system] You are Alice."
+      assert response.content =~ "[user] Hello there"
     end
   end
 
