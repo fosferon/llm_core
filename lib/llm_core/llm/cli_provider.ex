@@ -13,7 +13,9 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `subcommand` — optional subcommand prepended to args (e.g. `"exec"` for droid)
     * `provider_type` — always `:cli`
     * `default_timeout` — timeout in ms (default: 1_800_000 = 30 min)
-    * `default_model` — model string returned in responses when no model specified
+    * `default_model` — real model string used only when GC owns the default
+    * `model_resolution` — how model selection works for this CLI provider:
+      `:gc_default`, `:provider_runtime`, or `:explicit_only`
     * `flags` — map of opt key → CLI flag (e.g. `%{model: "--model", auto: "--auto"}`)
     * `prompt_position` — `:last` (default) or `:flagged` (e.g. claude uses `-p`)
     * `prompt_flag` — flag before the prompt when `prompt_position == :flagged` (e.g. `-p`)
@@ -75,7 +77,8 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           subcommand: String.t() | nil,
           provider_type: :cli,
           default_timeout: pos_integer(),
-          default_model: String.t(),
+          default_model: String.t() | nil,
+          model_resolution: :gc_default | :provider_runtime | :explicit_only,
           flags: %{atom() => String.t()},
           prompt_position: :last | :flagged,
           prompt_flag: String.t() | nil,
@@ -113,7 +116,8 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     :output_file_flag,
     provider_type: :cli,
     default_timeout: 1_800_000,
-    default_model: "cli-default",
+    default_model: nil,
+    model_resolution: :provider_runtime,
     flags: %{},
     prompt_position: :last,
     prefix_args: [],
@@ -581,7 +585,7 @@ defmodule LlmCore.LLM.CLIProvider do
     Response.new(
       content: String.trim(normalized),
       provider: cfg.name,
-      model: Keyword.get(opts, :model, cfg.default_model),
+      model: response_model(cfg, opts),
       raw: %{output: output},
       metadata: %{executed_at: DateTime.utc_now()}
     )
@@ -778,6 +782,22 @@ defmodule LlmCore.LLM.CLIProvider do
   defp effective_output_mode(%Config{}), do: :stdout_text
 
   defp has_flag?(%Config{flags: flags}, key), do: is_binary(Map.get(flags, key))
+
+  defp response_model(%Config{} = cfg, opts) do
+    cond do
+      Keyword.has_key?(opts, :resolved_runtime_model) ->
+        opts[:resolved_runtime_model]
+
+      Keyword.has_key?(opts, :model) ->
+        opts[:model]
+
+      cfg.model_resolution == :gc_default ->
+        cfg.default_model
+
+      true ->
+        nil
+    end
+  end
 
   # ── System Prompt File Transform ──────────────────────────
   #

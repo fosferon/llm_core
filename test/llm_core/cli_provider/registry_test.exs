@@ -54,6 +54,7 @@ defmodule LlmCore.CLIProvider.RegistryTest do
       custom = Enum.find(entries, &(&1.id == :custom_cli))
       assert custom.binary == "echo"
       assert custom.default_model == "custom-v1"
+      assert custom.model_resolution == :gc_default
     end
 
     test "entries have expected metadata fields" do
@@ -62,7 +63,7 @@ defmodule LlmCore.CLIProvider.RegistryTest do
 
       assert is_boolean(entry.available?)
       assert is_binary(entry.binary)
-      assert is_binary(entry.default_model)
+      assert entry.model_resolution in [:gc_default, :provider_runtime, :explicit_only]
       assert is_map(entry.capabilities)
       assert is_boolean(entry.supports_auto_approve?)
       assert is_boolean(entry.supports_sandbox_bypass?)
@@ -173,6 +174,7 @@ defmodule LlmCore.CLIProvider.RegistryTest do
 
       assert {:ok, entry} = Registry.fetch(:gemini_cli)
       assert entry.default_model == "overridden-gemini"
+      assert entry.model_resolution == :gc_default
       assert entry.binary == "echo"
 
       assert {:ok, provider} = Registry.resolve(:gemini_cli)

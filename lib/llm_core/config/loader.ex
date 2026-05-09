@@ -288,7 +288,8 @@ defmodule LlmCore.Config.Loader do
         aliases = normalize_aliases(Map.get(attrs, "aliases", []), id)
         agent = Map.get(attrs, "agent", %{})
         agent_name = Map.get(agent, "name") || List.first(aliases) || id
-        default_model = Map.get(attrs, "default_model") || cli_config.default_model
+        default_model = blank_to_nil(Map.get(attrs, "default_model") || cli_config.default_model)
+        model_resolution = resolve_cli_model_resolution(attrs, cli_config)
         metadata = normalize_metadata(attrs)
 
         capabilities =
@@ -307,6 +308,7 @@ defmodule LlmCore.Config.Loader do
           aliases: aliases,
           default_agent: agent_name,
           default_model: default_model,
+          model_resolution: model_resolution,
           agent_config: %{},
           options: %{},
           capabilities: capabilities,
@@ -329,6 +331,7 @@ defmodule LlmCore.Config.Loader do
   @valid_system_prompt_transports ~w(flag file_flag inline_fallback unsupported)
   @valid_output_modes ~w(stdout_text final_message_only json)
   @valid_file_transforms ~w(agent_spec_yaml)
+  @valid_model_resolutions ~w(gc_default provider_runtime explicit_only)
 
   defp build_cli_config(id, attrs) when is_map(attrs) do
     binary = Map.get(attrs, "binary")
@@ -347,7 +350,8 @@ defmodule LlmCore.Config.Loader do
             binary: binary,
             subcommand: blank_to_nil(Map.get(attrs, "subcommand")),
             default_timeout: Map.get(attrs, "default_timeout", 1_800_000),
-            default_model: Map.get(attrs, "default_model", "cli-default"),
+            default_model: blank_to_nil(Map.get(attrs, "default_model")),
+            model_resolution: resolve_model_resolution(attrs),
             flags: normalize_cli_flags(Map.get(attrs, "flags", %{})),
             prompt_position: safe_to_atom(Map.get(attrs, "prompt_position", "last")),
             prompt_flag: blank_to_nil(Map.get(attrs, "prompt_flag")),
@@ -386,6 +390,7 @@ defmodule LlmCore.Config.Loader do
       {"system_prompt_transport", Map.get(attrs, "system_prompt_transport"),
        @valid_system_prompt_transports},
       {"output_mode", Map.get(attrs, "output_mode"), @valid_output_modes},
+      {"model_resolution", Map.get(attrs, "model_resolution"), @valid_model_resolutions},
       {"system_prompt_file_transform", Map.get(attrs, "system_prompt_file_transform"),
        @valid_file_transforms}
     ]
@@ -407,8 +412,49 @@ defmodule LlmCore.Config.Loader do
       prompt_position == "flagged" and (is_nil(prompt_flag) or prompt_flag == "") ->
         {:error, {:cli_consistency, id, "prompt_position=flagged requires prompt_flag"}}
 
+      invalid_cli_default_model?(id, attrs) ->
+        {:error,
+         {:cli_consistency, id,
+          "default_model must be a real model id, not a provider/binary placeholder"}}
+
       true ->
         :ok
+    end
+  end
+
+  defp resolve_cli_model_resolution(attrs, %CLIProvider.Config{} = cli_config) do
+    Map.get(attrs, "model_resolution") || cli_config.model_resolution
+  end
+
+  defp resolve_model_resolution(attrs) do
+    case blank_to_nil(Map.get(attrs, "model_resolution")) do
+      nil ->
+        if blank_to_nil(Map.get(attrs, "default_model")), do: :gc_default, else: :provider_runtime
+
+      "provider_runtime" ->
+        if blank_to_nil(Map.get(attrs, "default_model")), do: :gc_default, else: :provider_runtime
+
+      value ->
+        safe_to_atom(value)
+    end
+  end
+
+  defp invalid_cli_default_model?(id, attrs) do
+    default_model = blank_to_nil(Map.get(attrs, "default_model"))
+    binary = blank_to_nil(Map.get(attrs, "binary"))
+    aliases = normalize_aliases(Map.get(attrs, "aliases", []), id)
+
+    case default_model do
+      nil ->
+        false
+
+      value ->
+        normalized = String.downcase(value)
+
+        normalized == String.downcase(id) or
+          normalized == String.downcase(Path.basename(binary || "")) or
+          normalized in Enum.map(aliases, &String.downcase/1) or
+          String.ends_with?(normalized, "-cli")
     end
   end
 

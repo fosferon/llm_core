@@ -22,6 +22,7 @@ defmodule LlmCore.Provider.Definition do
     field(:aliases, [String.t()], default: [])
     field(:default_agent, String.t())
     field(:default_model, String.t() | nil)
+    field(:model_resolution, :gc_default | :provider_runtime | :explicit_only | nil, default: nil)
     field(:agent_config, map(), default: %{})
     field(:options, map(), default: %{})
     field(:capabilities, map(), default: %{})

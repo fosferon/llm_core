@@ -335,7 +335,7 @@ defmodule LlmCore.Agent.Registry do
 
           config =
             %{}
-            |> maybe_put_model(definition.default_model)
+            |> maybe_put_model(cli_definition_model(definition))
             |> then(fn c ->
               if cli_name, do: Map.put(c, :cli_provider, cli_name), else: c
             end)
@@ -357,6 +357,10 @@ defmodule LlmCore.Agent.Registry do
       end
     end)
   end
+
+  defp cli_definition_model(%{model_resolution: :provider_runtime}), do: nil
+  defp cli_definition_model(%{model_resolution: :explicit_only}), do: nil
+  defp cli_definition_model(definition), do: definition.default_model
 
   defp register_agent(state, nil, _module, _config, _auto?), do: state
 

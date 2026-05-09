@@ -47,6 +47,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert definition.cli_config.binary == "echo"
       assert definition.cli_config.name == :echo_test
       assert definition.cli_config.default_model == "echo-v1"
+      assert definition.cli_config.model_resolution == :gc_default
       assert definition.cli_config.flags == %{model: "--model"}
       assert definition.aliases == ["echo", "echo-test"]
       assert definition.available? == true
@@ -183,6 +184,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert {:ok, cli_configs} = Store.fetch(:config, :cli_providers)
       assert Map.has_key?(cli_configs, :store_test)
       assert cli_configs[:store_test].binary == "echo"
+      assert cli_configs[:store_test].model_resolution == :gc_default
     end
 
     test "CLI and module providers coexist" do
@@ -286,6 +288,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert cfg.flags[:model] == "--model"
       assert cfg.flags[:system_prompt_file] == "--agent-file"
       assert cfg.preflight == %{help_args: ["--help"], expect_in_help: ["--model"]}
+      assert cfg.model_resolution == :gc_default
 
       # default_model from provider level overrides cli level
       assert def.default_model == "rich-v2"
@@ -307,6 +310,24 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert {:ok, providers} = Loader.reload_providers(path: config_path)
       assert providers["basic_mod"].provider_kind == :module
       assert providers["basic_mod"].cli_config == nil
+    end
+
+    test "CLI provider rejects placeholder default_model values" do
+      config_path = temp_path("cli_placeholder_default.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.kimi_cli]
+      type = "cli"
+      enabled = true
+
+      [providers.kimi_cli.cli]
+      binary = "echo"
+      default_model = "kimi-cli"
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      refute Map.has_key?(providers, "kimi_cli")
     end
   end
 

@@ -24,6 +24,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert config.binary == "kimi-cli"
       assert config.prompt_flag == "--prompt"
       assert config.system_prompt_transport == :file_flag
+      assert config.model_resolution == :provider_runtime
     end
 
     test "returns error for unknown provider" do
@@ -339,11 +340,18 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert response.model == "claude-opus-4-6"
     end
 
-    test "uses default_model when no model in opts" do
+    test "returns nil when provider runtime owns default model resolution" do
       provider = CLIProvider.from_config(:claude_code)
       response = CLIProvider.build_response(provider, "output", [])
 
-      assert response.model == "claude-code-cli"
+      assert response.model == nil
+    end
+
+    test "uses GC-owned default model when configured" do
+      provider = CLIProvider.from_config(:droid)
+      response = CLIProvider.build_response(provider, "output", [])
+
+      assert response.model == "claude-opus-4-6"
     end
   end
 
