@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.0 — 2026-05-09
+
+### Added
+- Comprehensive documentation overhaul: README, architecture guide, configuration guide,
+  new CLI Providers guide, new Agent Loop guide.
+- `ex_doc` and `earmark` as dev dependencies for Hex documentation generation.
+- Module grouping in ExDoc for organized API reference.
+- Enhanced `@moduledoc` for `LlmCore`, `LlmCore.Router`, `LlmCore.Structured`,
+  `LlmCore.Provider.Registry`, `LlmCore.CLIProvider.Registry`, `LlmCore.Config.Store`,
+  `LlmCore.Config.Loader`, and `LlmCore.Agent`.
+
+### Changed
+- Updated Hex package description to better reflect the library's scope.
+- README rewritten as a proper Hex landing page with real usage examples from
+  production consumers.
+
 ## 0.2.0 — 2026-05-01
 
 ### Added

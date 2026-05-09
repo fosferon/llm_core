@@ -11,7 +11,7 @@ defmodule LlmCore.Agent.Loop do
 
   ## Architecture Mirror
 
-  This is the same structural pattern as `HuMan.GrooveExecutor.run_steps`:
+  This mirrors the common `reduce_while` iteration pattern:
 
       GrooveExecutor                     Agent.Loop
       ─────────────                      ──────────

@@ -13,10 +13,9 @@ defmodule LlmCore.Agent.Pipeline.ToolDispatch do
 
   ## Architecture
 
-  This pipeline generalises the pattern established by bespoke dispatchers
-  (e.g. `HuMan.ALF.Researcher`, `HuMan.ALF.Planner`) that hardcode their
-  orchestration as sequential function calls. ToolDispatch makes it
-  declarative via ALF components.
+  This pipeline generalises the pattern of bespoke dispatchers that
+  hardcode tool orchestration as sequential function calls.
+  ToolDispatch makes it declarative via ALF components.
 
   ## Pipeline Structure
 

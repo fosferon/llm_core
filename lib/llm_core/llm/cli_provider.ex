@@ -986,8 +986,8 @@ defmodule LlmCore.LLM.CLIProvider do
 
   # ── Port Helpers ──────────────────────────────────────────
   #
-  # Direct Port-based execution (replaces dependency on DevMan.LLM.CLIPort).
-  # This makes CLIProvider self-contained in llm_core.
+  # Direct Port-based execution. No external dependency required —
+  # CLIProvider is fully self-contained within llm_core.
 
   defp run_port(executable, args, timeout, _execution_id) do
     case System.find_executable(executable) do

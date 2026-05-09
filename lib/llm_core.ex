@@ -1,9 +1,46 @@
 defmodule LlmCore do
   @moduledoc """
-  Public facade for llm_core capabilities.
+  Public facade for LlmCore capabilities.
 
-  Provides convenience delegates for routing prompts and interacting
-  with the resilient Hindsight client.
+  This is the primary entry point for most LlmCore usage. It delegates to
+  the routing pipeline, inference pipeline, and Hindsight memory client.
+
+  ## Sending Prompts
+
+      # Route by task type (configured in TOML [routing.tasks])
+      {:ok, response} = LlmCore.send("Explain pattern matching", :reasoning)
+
+      # Stream a response
+      {:ok, stream} = LlmCore.stream("Write a GenServer example", :coding)
+      Enum.each(stream, &IO.write/1)
+
+      # Extract structured output
+      {:ok, response} = LlmCore.send(prompt, :extraction,
+        response_format: {:json_schema, %{type: "object", properties: %{...}}}
+      )
+      response.structured #=> %{"name" => "value"}
+
+  ## Semantic Memory
+
+      # Store (async, buffered)
+      :ok = LlmCore.retain("Key architectural decision", %{context: "architecture"})
+
+      # Recall by meaning
+      {:ok, results} = LlmCore.recall("multi-tenancy patterns", bank_id: "my-bank")
+
+      # Synthesize an insight
+      {:ok, insight} = LlmCore.reflect("What patterns work best?", bank_id: "my-bank")
+
+  ## Routing Introspection
+
+      # View current routing table
+      table = LlmCore.routing_table()
+
+      # Force reload from config
+      :ok = LlmCore.reload_routing()
+
+      # Check Hindsight availability
+      LlmCore.hindsight_available?()
   """
 
   alias LlmCore.Router

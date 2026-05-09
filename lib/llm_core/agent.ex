@@ -3,30 +3,22 @@ defmodule LlmCore.Agent do
   Agent struct representing a registered LLM provider with a human-friendly name.
 
   Each agent encapsulates:
-  - A unique name (alias) for human-friendly identification
-  - The provider module implementing the `LlmCore.LLM.Provider` behaviour
-  - Provider-specific configuration
-  - Registration timestamp for debugging/auditing
 
-  ## Name Validation
+    * A name/alias for routing lookups
+    * The underlying provider module or CLI config
+    * Default configuration (model, temperature, etc.)
 
-  Agent names must be lowercase alphanumeric with dashes or underscores:
-  - Valid: "steve", "claude-code", "openai_4o", "agent123"
-  - Invalid: "UPPERCASE", "with spaces", "special@chars"
+  Agents are registered by the config loader from TOML `[providers.*]` blocks.
+  They are keyed by the provider's aliases, not by `agent.name`.
 
-  ## Example
+  ## Accessing Agents
 
-      %Agent{
-        name: "steve",
-        provider: LlmCore.LLM.CLIProvider,
-        config: %{model: "claude-3-opus", temperature: 0.7},
-        registered_at: ~U[2024-01-12 10:30:00Z]
-      }
+      # By alias (from TOML or runtime)
+      {:ok, agent} = LlmCore.Agent.Registry.get("claude")
 
-  ## Pattern Reference
+      # Get the dispatchable provider
+      provider = LlmCore.Agent.dispatch_provider(agent)
 
-  Follows VaultWise `Chat.Agent` schema pattern for name validation,
-  using lowercase alphanumeric with dashes/underscores as the `short_name` format.
   """
 
   @type t :: %__MODULE__{

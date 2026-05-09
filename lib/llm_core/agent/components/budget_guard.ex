@@ -10,7 +10,7 @@ defmodule LlmCore.Agent.Components.BudgetGuard do
   Skips processing when the decision is already `:done` (no tool calls)
   or when the pipeline is in error status.
 
-  Analogous to the guard clauses in `HuMan.GrooveExecutor.execute/4`
+  Analogous to budget guard clauses in step-oriented loop executors:
   that check recursion depth before proceeding.
   """
 

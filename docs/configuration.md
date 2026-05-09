@@ -161,7 +161,7 @@ Use `system_prompt_file_transform` to declare the preparation step:
   2. **`file_transform_defaults`** — provider-level TOML defaults
   3. **Built-in fallbacks** — `name: "llm_core_agent"`, `version: 1`, `extend: "default"`
 
-  Consumers like gc_daemon should pass `:agent_name` and `:model` as opts
+  Consumers should pass `:agent_name` and `:model` as opts
   when dispatching to CLI providers that use this transform.
 
 **Output capture and normalization:**

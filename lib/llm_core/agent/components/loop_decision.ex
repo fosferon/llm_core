@@ -11,7 +11,7 @@ defmodule LlmCore.Agent.Components.LoopDecision do
 
   Emits the `[:llm_core, :agent, :loop_iteration]` telemetry event.
 
-  Analogous to `Mobus.Stepwise.Components.StepwiseProjection`: the final
+  Analogous to a projection stage: the final
   stage that packages the pipeline output into the contract the consumer
   expects.
   """

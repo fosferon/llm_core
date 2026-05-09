@@ -1,6 +1,29 @@
 defmodule LlmCore.Config.Loader do
   @moduledoc """
   Loads llm_core configuration files (routing, providers, etc.) from disk and updates the store.
+
+  Handles the full TOML loading pipeline: reading multiple config layers, deep-merging,
+  resolving environment variable placeholders, normalizing provider definitions, and
+  broadcasting change notifications to dependent processes.
+
+  ## Configuration Layers (later overrides earlier)
+
+  1. **Compiled defaults** — `priv/config/llm_core.toml` (bundled with the library)
+  2. **Global override** — `~/.llm_core/config/llm_core.toml`
+  3. **Project override** — `<project>/.llm_core/llm_core.toml`
+  4. **Environment variable** — path in `LLM_CORE_CONFIG`
+  5. **Custom path** — explicit `:path` option
+
+  ## Environment Variable Interpolation
+
+  TOML values like `"${ANTHROPIC_API_KEY}"` are resolved at load time.
+  Supports defaults: `"${OLLAMA_URL:http://localhost:11434}"`.
+
+  ## Key Functions
+
+    * `reload_providers/1` — Full TOML load + provider normalization + store update
+    * `reload_routing/1` — Load and apply routing rules only
+    * `load_config/1` — Read merged TOML without mutating runtime state
   """
 
   require Logger
@@ -36,7 +59,7 @@ defmodule LlmCore.Config.Loader do
   When `routing.yml` is missing, the existing Store routing is preserved
   (e.g. a table already installed from TOML via `reload_providers/1`). Only
   when the Store has no routing at all does the safe `default => claude`
-  fallback get installed. See GC-758.
+  fallback get installed.
   """
   @spec reload_routing(keyword()) :: {:ok, RoutingTable.t()} | {:error, term()}
   def reload_routing(opts \\ []) do
@@ -192,7 +215,7 @@ defmodule LlmCore.Config.Loader do
     # Resolve via :code.priv_dir so the bundled defaults are found in the
     # build artifact (`_build/<env>/lib/llm_core/priv/config/llm_core.toml`).
     # Mix always copies `priv/` into the build dir, unlike top-level `config/`
-    # which is build-tool-only. See GC-758.
+    # which is build-tool-only.
     case :code.priv_dir(:llm_core) do
       {:error, _} -> nil
       priv -> Path.join([priv, "config", @config_filename])

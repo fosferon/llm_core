@@ -1,6 +1,41 @@
 defmodule LlmCore.Router do
   @moduledoc """
   GenServer that resolves task types to full LLM agent configurations.
+
+  The Router maintains a `RoutingTable` loaded from TOML configuration and
+  resolves task strings (like `"coding"`, `"reasoning"`) to `ResolvedRoute`
+  structs containing the provider alias, execution mode, and agent metadata.
+
+  ## Configuration
+
+  Routing rules are defined in TOML under `[routing]`:
+
+      [routing]
+      default = "claude"
+
+      [routing.tasks.coding]
+      alias = "openai"
+      mode = "passthrough"
+      capabilities = { structured_output = true, tool_use = true }
+
+  ## Usage
+
+      # Resolve a task type
+      {:ok, route} = LlmCore.Router.resolve(:coding)
+      route.alias #=> "openai"
+      route.mode #=> :passthrough
+
+      # Send a prompt through routing
+      {:ok, response} = LlmCore.Router.send("Write a function", :coding)
+
+      # Stream
+      {:ok, stream} = LlmCore.Router.stream("Explain this", :reasoning)
+
+  ## Hot Reload
+
+  The Router listens for `{:config_reloaded, :routing}` messages and
+  refreshes its routing table from `Config.Store`. It also syncs
+  every 60 seconds as a safety net.
   """
   use GenServer
   require Logger

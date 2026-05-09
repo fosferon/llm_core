@@ -2,8 +2,28 @@ defmodule LlmCore.Config.Store do
   @moduledoc """
   Lightweight ETS-backed storage for runtime configuration.
 
-  The store keeps the latest routing tables and other hot-reloadable
-  artifacts so they can be accessed without disk I/O.
+  The store keeps the latest routing tables, provider definitions, CLI configs,
+  and other hot-reloadable artifacts so they can be accessed without disk I/O.
+
+  ## Stored Namespaces
+
+    * `{:config, :routing}` — Current `RoutingTable`
+    * `{:config, :providers}` — Map of `%Definition{}` structs keyed by provider id
+    * `{:config, :cli_providers}` — Map of `%CLIProvider.Config{}` structs keyed by atom name
+    * `{:config, :telemetry}` — Telemetry settings map
+    * `{:config, :raw}` — Raw merged TOML configuration
+
+  ## Access Patterns
+
+  Direct ETS reads (no GenServer call):
+
+      {:ok, table} = LlmCore.Config.Store.get_routing()
+      {:ok, providers} = LlmCore.Config.Store.fetch(:config, :providers)
+
+  Writes go through the GenServer for serialisation:
+
+      :ok = LlmCore.Config.Store.put_routing(%RoutingTable{...})
+      :ok = LlmCore.Config.Store.put(:config, :telemetry, %{...})
   """
 
   use GenServer

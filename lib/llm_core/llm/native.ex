@@ -314,7 +314,7 @@ defmodule LlmCore.LLM.Native do
     model in models
   end
 
-  defp build_llm_send(provider_mod, resolved_model, provider_opts \\ []) do
+  defp build_llm_send(provider_mod, resolved_model, provider_opts) do
     fn messages, loop_opts ->
       loop_opts =
         loop_opts

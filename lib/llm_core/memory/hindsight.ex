@@ -27,16 +27,16 @@ defmodule LlmCore.Memory.Hindsight do
   ## Usage
 
       # Semantic search
-      {:ok, results} = Hindsight.recall("authentication patterns", bank_id: "mobus")
+      {:ok, results} = Hindsight.recall("authentication patterns", bank_id: "my-bank")
 
       # Insights
-      {:ok, insight} = Hindsight.reflect("What patterns work best?", bank_id: "mobus")
+      {:ok, insight} = Hindsight.reflect("What patterns work best?", bank_id: "my-bank")
 
       # Store content (async)
-      :ok = Hindsight.retain("New pattern discovered", %{}, bank_id: "mobus")
+      :ok = Hindsight.retain("New pattern discovered", %{}, bank_id: "my-bank")
 
       # Store content (sync, for critical data)
-      {:ok, _} = Hindsight.retain_sync("Critical execution", %{}, bank_id: "mobus")
+      {:ok, _} = Hindsight.retain_sync("Critical execution", %{}, bank_id: "my-bank")
   """
 
   require Logger
@@ -457,8 +457,6 @@ defmodule LlmCore.Memory.Hindsight do
 
   defp application_version do
     cond do
-      version = Application.spec(:dev_man, :vsn) -> to_string(version)
-      version = Application.spec(:hu_man, :vsn) -> to_string(version)
       version = Application.spec(:llm_core, :vsn) -> to_string(version)
       true -> "unknown"
     end

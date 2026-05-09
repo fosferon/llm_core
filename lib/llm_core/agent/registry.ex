@@ -39,10 +39,7 @@ defmodule LlmCore.Agent.Registry do
       # List all agents
       agents = Registry.list()
 
-  ## Pattern Reference
 
-  Follows VaultWise `Chat.Agent` schema pattern for agent management,
-  adapted for in-memory GenServer storage rather than database persistence.
   """
 
   use GenServer
@@ -418,7 +415,7 @@ defmodule LlmCore.Agent.Registry do
   defp merge_provider_options(agent_config, options)
        when is_map(agent_config) and is_map(options) do
     # Both sides must be normalized to the same key type before merging,
-    # otherwise `:base_url` and `"base_url"` collide silently — see GC-760.
+    # otherwise `:base_url` and `"base_url"` collide silently.
     # `definition.agent_config` already has atom keys (normalized at Loader
     # time), but `definition.options` comes straight from Toml.decode_file/1
     # with string keys. Normalize options first, then merge so agent_config

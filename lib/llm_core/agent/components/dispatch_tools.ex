@@ -17,7 +17,7 @@ defmodule LlmCore.Agent.Components.DispatchTools do
     * `[:llm_core, :agent, :tool_call, :start]`
     * `[:llm_core, :agent, :tool_call, :stop]`
 
-  Analogous to `Mobus.Stepwise.Components.StepwiseAction`: the stage that
+  Analogous to a stepwise action stage: the stage that
   executes the actual work (capabilities in stepwise, tool resolution here).
   """
 

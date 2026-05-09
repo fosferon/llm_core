@@ -3,7 +3,34 @@ defmodule LlmCore.Provider.Registry do
   In-memory accessors for provider definitions loaded from TOML configuration.
 
   The registry reads provider metadata from `LlmCore.Config.Store` so callers
-  can inspect capabilities or resolve modules without touching disk.
+  can inspect capabilities, resolve modules, find providers by alias, and get
+  fuzzy suggestions — all without touching disk.
+
+  ## Querying Providers
+
+      # All configured providers (keyed by id)
+      LlmCore.Provider.Registry.all()
+      #=> %{"anthropic" => %Definition{...}, "openai" => %Definition{...}, ...}
+
+      # Only available providers (enabled, API key present / binary found)
+      LlmCore.Provider.Registry.available()
+
+      # By exact id
+      {:ok, def} = LlmCore.Provider.Registry.fetch("anthropic")
+
+      # By implementing module
+      {:ok, def} = LlmCore.Provider.Registry.lookup_by_module(LlmCore.LLM.OpenAI)
+
+      # By alias (returns all matching)
+      defs = LlmCore.Provider.Registry.lookup_alias("claude")
+
+      # Fuzzy suggestions (Jaro distance)
+      LlmCore.Provider.Registry.suggest_alias("claud")
+      #=> ["claude"]
+
+      # Capable providers for requirements
+      LlmCore.Provider.Registry.suggest_capable(%{streaming: true, tool_use: true})
+      #=> [%{alias: "claude", provider: "anthropic", cost_tier: "premium", ...}]
   """
 
   alias LlmCore.Config.Store

@@ -9,7 +9,7 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
   If tool calls are present, populates `ctx.tool_calls` for downstream
   stages.
 
-  Analogous to `Mobus.Stepwise.Components.StepwiseContextMerge`: takes
+  Analogous to a context merge stage: takes
   raw input and normalizes it into the pipeline's working format.
   """
 

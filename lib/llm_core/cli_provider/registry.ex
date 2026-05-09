@@ -2,9 +2,30 @@ defmodule LlmCore.CLIProvider.Registry do
   @moduledoc """
   Query surface for CLI-based LLM providers.
 
-  Merges built-in CLI providers with TOML-configured ones, providing a
-  single API for downstream apps to discover, inspect, and resolve CLI
-  providers without hard-coding any provider list.
+  Merges built-in CLI providers (shipped in `priv/config/llm_core.toml`) with
+  TOML-configured ones (project/global overrides). TOML definitions win on conflict.
+
+  ## Usage
+
+      # All known CLI providers with structured metadata
+      LlmCore.CLIProvider.Registry.list()
+
+      # Only those with binary in PATH
+      LlmCore.CLIProvider.Registry.available()
+
+      # Fetch by atom ID or string alias
+      {:ok, entry} = LlmCore.CLIProvider.Registry.fetch(:droid)
+      {:ok, entry} = LlmCore.CLIProvider.Registry.fetch("pi")
+
+      # Get a ready-to-use provider struct
+      {:ok, provider} = LlmCore.CLIProvider.Registry.resolve(:claude_code)
+
+      # Inspect capabilities
+      {:ok, caps} = LlmCore.CLIProvider.Registry.capabilities(:codex_cli)
+
+  Each entry includes: `id`, `aliases`, `binary`, `available?`, `install_hint`,
+  `default_model`, `capabilities`, `supports_auto_approve?`, `supports_sandbox_bypass?`,
+  `supports_system_prompt_file?`, `supports_cwd?`, `supports_add_dir?`, `metadata`.
 
   ## Resolution Order
 

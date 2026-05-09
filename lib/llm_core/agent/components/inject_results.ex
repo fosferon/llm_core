@@ -10,7 +10,7 @@ defmodule LlmCore.Agent.Components.InjectResults do
 
   These messages are stored in `ctx.result_messages` — the outer loop
   reads them and appends to the accumulated message list. This mirrors
-  how `HuMan.GrooveExecutor.run_steps` accumulates `step_results` outside
+  how a step-oriented loop executor accumulates `step_results` outside
   the pipeline.
   """
 

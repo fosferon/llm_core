@@ -2,8 +2,36 @@ defmodule LlmCore.Structured do
   @moduledoc """
   Utilities for extracting structured data from LLM responses.
 
-  For now we focus on lightweight JSON-mode validation so consuming applications
-  can request schemas without pulling in heavy dependencies like Instructor.
+  Provides lightweight JSON-mode extraction and schema validation so
+  consuming applications can request structured output without pulling
+  in heavy dependencies like Instructor.
+
+  ## Supported Formats
+
+    * `{:json_schema, schema}` — Decode JSON from the response, validate against a schema map
+    * `{:json_schema, schema, opts}` — Same, with custom validator and options
+    * `{:custom, fun}` — Apply a custom extraction function `(Response.t() -> {:ok, term()} | {:error, term()})`
+
+  ## Usage
+
+  Structured output is typically requested via `response_format` in the dispatch opts:
+
+      {:ok, response} = LlmCore.send(prompt, :extraction,
+        response_format: {:json_schema, %{type: "object", properties: %{name: %{type: "string"}}}}
+      )
+
+      response.structured
+      #=> %{"name" => "value"}
+
+  Or process a response directly:
+
+      {:ok, response} = Structured.process({:ok, raw_response}, {:json_schema, schema})
+
+  ## Custom Validators
+
+      {:json_schema, schema, validator: fn value ->
+        if value["score"] > 0.5, do: {:ok, value}, else: {:error, "score too low"}
+      end}
   """
 
   alias LlmCore.LLM.Response
