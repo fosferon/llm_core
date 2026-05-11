@@ -18,8 +18,9 @@ defmodule LlmCore.Provider.Registry do
       # By exact id
       {:ok, def} = LlmCore.Provider.Registry.fetch("anthropic")
 
-      # By implementing module
-      {:ok, def} = LlmCore.Provider.Registry.lookup_by_module(LlmCore.LLM.OpenAI)
+      # By unique alias (e.g. "claude", "openai", "zai" — disambiguates providers
+      # that share a backing module)
+      {:ok, def} = LlmCore.Provider.Registry.lookup_by_alias("openai")
 
       # By alias (returns all matching)
       defs = LlmCore.Provider.Registry.lookup_alias("claude")
@@ -72,14 +73,19 @@ defmodule LlmCore.Provider.Registry do
   end
 
   @doc """
-  Finds a provider definition by the implementing module.
+  Finds the provider definition that declares the given alias.
+
+  The alias is the unique configuration key — two definitions are free to share
+  a backing module (e.g. `openai` and `zai` both backed by `LlmCore.LLM.OpenAI`)
+  but each alias resolves to exactly one definition. Whitespace and case are
+  normalized for comparison, mirroring `lookup_alias/1`.
   """
-  @spec lookup_by_module(module()) :: {:ok, Definition.t()} | {:error, :not_found}
-  def lookup_by_module(module) when is_atom(module) do
-    all()
-    |> Enum.find(fn {_id, definition} -> definition.module == module end)
-    |> case do
-      {_, definition} -> {:ok, definition}
+  @spec lookup_by_alias(String.t()) :: {:ok, Definition.t()} | {:error, :not_found}
+  def lookup_by_alias(alias) when is_binary(alias) do
+    normalized = normalize_alias(alias)
+
+    case Enum.find(all(), fn {_id, definition} -> normalized in definition.aliases end) do
+      {_id, definition} -> {:ok, definition}
       nil -> {:error, :not_found}
     end
   end

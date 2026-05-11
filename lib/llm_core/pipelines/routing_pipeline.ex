@@ -145,7 +145,7 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
           ctx,
         _opts
       ) do
-    if capability_match?(agent.provider, requirements || %{}) do
+    if capability_match?(agent.provider, agent.name, requirements || %{}) do
       ctx
     else
       suggestions = ProviderRegistry.suggest_capable(requirements || %{})
@@ -212,9 +212,9 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     end
   end
 
-  defp capability_match?(provider_module, requirements) do
+  defp capability_match?(provider_module, alias, requirements) do
     definition_capabilities =
-      case ProviderRegistry.lookup_by_module(provider_module) do
+      case ProviderRegistry.lookup_by_alias(alias) do
         {:ok, definition} -> definition.capabilities || %{}
         _ -> fetch_module_capabilities(provider_module)
       end
