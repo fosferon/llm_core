@@ -69,6 +69,10 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `output_strip_patterns` — list of regex pattern strings applied to stdout
       output to strip banners, session noise, or decorators before building the
       response. Applied only to stdout-based output (not file capture).
+    * `tool_call_transport` — optional provider-agnostic tool bridge used for
+      CLIs that do not natively expose structured tool calls. When set,
+      llm_core injects tool-call instructions into the system prompt and parses
+      fenced tool-call payloads back out of plain-text CLI responses.
   """
 
   @type t :: %__MODULE__{
@@ -97,7 +101,8 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           system_prompt_file_transform: :agent_spec_yaml | nil,
           file_transform_defaults: map(),
           output_file_flag: String.t() | nil,
-          output_strip_patterns: [String.t()]
+          output_strip_patterns: [String.t()],
+          tool_call_transport: :llm_core_json | nil
         }
 
   @enforce_keys [:name, :binary]
@@ -114,6 +119,7 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     :output_mode,
     :system_prompt_file_transform,
     :output_file_flag,
+    :tool_call_transport,
     provider_type: :cli,
     default_timeout: 1_800_000,
     default_model: nil,
@@ -401,7 +407,8 @@ defmodule LlmCore.LLM.CLIProvider do
       persona: %{
         native_file: has_flag?(cfg, :system_prompt_file),
         inline_fallback: effective_system_prompt_transport(cfg) == :inline_fallback,
-        file_transform: cfg.system_prompt_file_transform
+        file_transform: cfg.system_prompt_file_transform,
+        tool_call_transport: cfg.tool_call_transport
       },
       detached_stdin: cfg.stdin_hack
     }
@@ -581,13 +588,15 @@ defmodule LlmCore.LLM.CLIProvider do
   @spec build_response(t(), String.t(), keyword()) :: Response.t()
   def build_response(%__MODULE__{config: cfg}, output, opts) do
     normalized = normalize_output(output, cfg)
+    {content, tool_calls} = maybe_decode_tool_calls(normalized, cfg)
 
     Response.new(
-      content: String.trim(normalized),
+      content: String.trim(content),
       provider: cfg.name,
       model: response_model(cfg, opts),
       raw: %{output: output},
-      metadata: %{executed_at: DateTime.utc_now()}
+      metadata: %{executed_at: DateTime.utc_now()},
+      tool_calls: tool_calls
     )
   end
 
@@ -701,7 +710,7 @@ defmodule LlmCore.LLM.CLIProvider do
 
   defp prepare_prompt_and_opts(%__MODULE__{config: cfg}, prompt, opts) do
     cli_prompt = Messages.render_cli_prompt(prompt)
-    system_prompt_text = system_prompt_text(opts)
+    system_prompt_text = system_prompt_text(opts, cfg)
     transport = effective_system_prompt_transport(cfg)
 
     cond do
@@ -731,20 +740,23 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
-  defp system_prompt_text(opts) do
-    cond do
-      is_binary(opts[:system_prompt]) and opts[:system_prompt] != "" ->
-        opts[:system_prompt]
+  defp system_prompt_text(opts, %Config{} = cfg) do
+    base =
+      cond do
+        is_binary(opts[:system_prompt]) and opts[:system_prompt] != "" ->
+          opts[:system_prompt]
 
-      is_binary(opts[:system_prompt_file]) and opts[:system_prompt_file] != "" ->
-        case File.read(opts[:system_prompt_file]) do
-          {:ok, contents} -> contents
-          _ -> nil
-        end
+        is_binary(opts[:system_prompt_file]) and opts[:system_prompt_file] != "" ->
+          case File.read(opts[:system_prompt_file]) do
+            {:ok, contents} -> contents
+            _ -> nil
+          end
 
-      true ->
-        nil
-    end
+        true ->
+          nil
+      end
+
+    maybe_inject_tool_bridge(base, cfg, opts)
   end
 
   defp inline_system_prompt(system_prompt, prompt) do
@@ -886,6 +898,123 @@ defmodule LlmCore.LLM.CLIProvider do
   end
 
   defp apply_file_transform(_unknown, _content, _context), do: nil
+
+  # ── Provider-Agnostic CLI Tool Bridge ────────────────────
+
+  defp maybe_inject_tool_bridge(system_prompt, %Config{tool_call_transport: nil}, _opts),
+    do: system_prompt
+
+  defp maybe_inject_tool_bridge(system_prompt, %Config{tool_call_transport: :llm_core_json}, opts) do
+    tools = Keyword.get(opts, :tools, [])
+
+    if is_list(tools) and tools != [] do
+      bridge =
+        """
+        [LLM_CORE TOOL BRIDGE]
+        If you need to call a tool, do not describe the call in prose.
+        Output ONLY one fenced code block with info string `llm_core_tool_call`
+        for a single call or `llm_core_tool_calls` for multiple calls.
+
+        Single tool call:
+        ```llm_core_tool_call
+        {"name":"tool_name","arguments":{"key":"value"}}
+        ```
+
+        Multiple tool calls:
+        ```llm_core_tool_calls
+        {"tool_calls":[{"name":"tool_one","arguments":{}},{"name":"tool_two","arguments":{"x":1}}]}
+        ```
+
+        When you emit either fence, output nothing else.
+
+        Available tools for this turn:
+        #{render_tool_bridge_catalog(tools)}
+        """
+        |> String.trim()
+
+      case system_prompt do
+        text when is_binary(text) and text != "" -> text <> "\n\n" <> bridge
+        _ -> bridge
+      end
+    else
+      system_prompt
+    end
+  end
+
+  defp render_tool_bridge_catalog(tools) do
+    Enum.map_join(tools, "\n\n", fn tool ->
+      """
+      - #{tool.name}
+        Description: #{tool.description}
+        Parameters JSON Schema: #{Jason.encode!(tool.parameters || %{})}
+      """
+      |> String.trim()
+    end)
+  end
+
+  defp maybe_decode_tool_calls(output, %Config{tool_call_transport: :llm_core_json}) do
+    case decode_llm_core_json_tool_calls(output) do
+      {:ok, calls, remaining} -> {remaining, calls}
+      :error -> {output, nil}
+    end
+  end
+
+  defp maybe_decode_tool_calls(output, _cfg), do: {output, nil}
+
+  defp decode_llm_core_json_tool_calls(output) when is_binary(output) do
+    regex = ~r/```llm_core_tool_calls?\s*\n(?<json>[\s\S]*?)\n```/U
+
+    case Regex.named_captures(regex, output) do
+      %{"json" => json} ->
+        with {:ok, decoded} <- Jason.decode(String.trim(json)),
+             {:ok, calls} <- normalize_bridge_calls(decoded) do
+          remaining = Regex.replace(regex, output, "") |> String.trim()
+          {:ok, calls, remaining}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_bridge_calls(%{"tool_calls" => calls}) when is_list(calls) do
+    calls
+    |> Enum.with_index(1)
+    |> Enum.map(fn {call, idx} -> normalize_bridge_call(call, idx) end)
+    |> collect_bridge_calls()
+  end
+
+  defp normalize_bridge_calls(call) when is_map(call) do
+    case normalize_bridge_call(call, 1) do
+      {:ok, tool_call} -> {:ok, [tool_call]}
+      error -> error
+    end
+  end
+
+  defp normalize_bridge_calls(_), do: :error
+
+  defp normalize_bridge_call(call, idx) when is_map(call) do
+    attrs = %{
+      "id" => Map.get(call, "id") || "cli_call_#{idx}",
+      "name" => Map.get(call, "name"),
+      "arguments" => Map.get(call, "arguments", %{})
+    }
+
+    LlmToolkit.Tool.Call.new(attrs)
+  end
+
+  defp collect_bridge_calls(results) do
+    Enum.reduce_while(results, {:ok, []}, fn
+      {:ok, call}, {:ok, acc} -> {:cont, {:ok, [call | acc]}}
+      _error, _acc -> {:halt, :error}
+    end)
+    |> case do
+      {:ok, calls} -> {:ok, Enum.reverse(calls)}
+      :error -> :error
+    end
+  end
 
   # ── Output File Capture ───────────────────────────────────
 
