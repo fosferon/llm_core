@@ -49,6 +49,51 @@ defmodule LlmCore.Pipelines.RoutingPipelineTest do
     assert Enum.all?(info.suggestions, &is_map/1)
   end
 
+  test "resolves capability lookup by alias when multiple providers share a module" do
+    shared_module = LlmCore.TestProviders.Basic
+
+    # Disjoint exclusive capabilities so a wrong (module-keyed) lookup MUST
+    # surface the wrong definition for at least one of the two routes,
+    # regardless of map iteration order.
+    put_providers(%{
+      "structured_only" => %LlmCore.Provider.Definition{
+        id: "structured_only",
+        module: shared_module,
+        aliases: ["structured_only"],
+        capabilities: %{streaming: true, structured_output: true},
+        available?: true
+      },
+      "reasoning_only" => %LlmCore.Provider.Definition{
+        id: "reasoning_only",
+        module: shared_module,
+        aliases: ["reasoning_only"],
+        capabilities: %{streaming: true, reasoning: true},
+        available?: true
+      }
+    })
+
+    register_agent("structured_only", shared_module)
+    register_agent("reasoning_only", shared_module)
+
+    put_routing(%{
+      "default" => %{"alias" => "structured_only", "capabilities" => %{streaming: true}},
+      "needs_structured" => %{
+        "alias" => "structured_only",
+        "capabilities" => %{structured_output: true}
+      },
+      "needs_reasoning" => %{
+        "alias" => "reasoning_only",
+        "capabilities" => %{reasoning: true}
+      }
+    })
+
+    assert {:ok, structured_route} = RoutingPipeline.route("needs_structured")
+    assert structured_route.alias == "structured_only"
+
+    assert {:ok, reasoning_route} = RoutingPipeline.route("needs_reasoning")
+    assert reasoning_route.alias == "reasoning_only"
+  end
+
   property "resolves generated routing tables" do
     check all(fixture <- routing_case_generator()) do
       cleanup_registry()
@@ -100,6 +145,10 @@ defmodule LlmCore.Pipelines.RoutingPipelineTest do
   defp put_routing(map) do
     table = RoutingTable.new(map)
     :ok = Store.put_routing(table)
+  end
+
+  defp put_providers(providers) when is_map(providers) do
+    :ok = Store.put(:config, :providers, providers)
   end
 
   defp routing_case_generator do

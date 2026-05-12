@@ -276,6 +276,7 @@ system_prompt_file_transform = "agent_spec_yaml"
 cwd_flag = "--work-dir"
 add_dir_flag = "--add-dir"
 output_mode = "final_message_only"
+tool_call_transport = "llm_core_json"
 stdin_hack = false
 prefix_args = ["--print", "--output-format", "text", "--final-message-only"]
 # Kimi appends a resumable session footer even in final-message mode.

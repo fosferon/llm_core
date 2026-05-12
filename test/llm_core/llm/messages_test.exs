@@ -24,5 +24,40 @@ defmodule LlmCore.LLM.MessagesTest do
 
       assert Messages.render_cli_prompt(prompt) == "[system] sys\n[user] hello"
     end
+
+    test "preserves assistant tool calls and tool result ids" do
+      rendered =
+        Messages.render_cli_prompt([
+          %{
+            role: :assistant,
+            content: "",
+            tool_calls: [
+              %LlmToolkit.Tool.Call{
+                id: "call_1",
+                name: "gc_mcpclient",
+                arguments: %{"action" => "servers"}
+              }
+            ]
+          },
+          %{role: :tool, tool_call_id: "call_1", content: ~s({"servers":[{"name":"obsidian"}]})}
+        ])
+
+      assert rendered =~ "```llm_core_tool_calls"
+      assert rendered =~ "\"gc_mcpclient\""
+      assert rendered =~ "[tool id=call_1]"
+      assert rendered =~ "\"obsidian\""
+    end
+
+    test "renders plain assistant messages without tool_calls block" do
+      rendered =
+        Messages.render_cli_prompt([
+          %{role: :assistant, content: "I can help with that."},
+          %{role: :user, content: "Thanks"}
+        ])
+
+      refute rendered =~ "llm_core_tool_calls"
+      assert rendered =~ "[assistant] I can help with that."
+      assert rendered =~ "[user] Thanks"
+    end
   end
 end

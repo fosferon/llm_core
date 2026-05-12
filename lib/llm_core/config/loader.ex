@@ -354,6 +354,7 @@ defmodule LlmCore.Config.Loader do
   @valid_system_prompt_transports ~w(flag file_flag inline_fallback unsupported)
   @valid_output_modes ~w(stdout_text final_message_only json)
   @valid_file_transforms ~w(agent_spec_yaml)
+  @valid_tool_call_transports ~w(llm_core_json)
   @valid_model_resolutions ~w(gc_default provider_runtime explicit_only)
 
   defp build_cli_config(id, attrs) when is_map(attrs) do
@@ -396,7 +397,8 @@ defmodule LlmCore.Config.Loader do
             file_transform_defaults:
               normalize_file_transform_defaults(Map.get(attrs, "file_transform_defaults", %{})),
             output_file_flag: blank_to_nil(Map.get(attrs, "output_file_flag")),
-            output_strip_patterns: List.wrap(Map.get(attrs, "output_strip_patterns", []))
+            output_strip_patterns: List.wrap(Map.get(attrs, "output_strip_patterns", [])),
+            tool_call_transport: safe_to_atom_or_nil(Map.get(attrs, "tool_call_transport"))
           }
 
           {:ok, config}
@@ -413,6 +415,7 @@ defmodule LlmCore.Config.Loader do
       {"system_prompt_transport", Map.get(attrs, "system_prompt_transport"),
        @valid_system_prompt_transports},
       {"output_mode", Map.get(attrs, "output_mode"), @valid_output_modes},
+      {"tool_call_transport", Map.get(attrs, "tool_call_transport"), @valid_tool_call_transports},
       {"model_resolution", Map.get(attrs, "model_resolution"), @valid_model_resolutions},
       {"system_prompt_file_transform", Map.get(attrs, "system_prompt_file_transform"),
        @valid_file_transforms}

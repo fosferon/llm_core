@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.1 — 2026-05-11
+
+### Fixed
+- `LlmCore.Pipelines.RoutingPipeline` no longer returns false `:capability_mismatch`
+  errors when multiple provider definitions share a backing module (e.g. `openai`
+  and `zai` both backed by `LlmCore.LLM.OpenAI`, or multiple Ollama-backed
+  personas). Capability lookup is now keyed by the resolved provider **alias**
+  rather than the (non-unique) module. (GC-1279)
+
+### Changed
+- **Breaking:** `LlmCore.Provider.Registry.lookup_by_module/1` has been replaced
+  by `LlmCore.Provider.Registry.lookup_by_alias/1`. The previous function was
+  fundamentally ambiguous whenever two definitions shared a module; the alias is
+  the unique configuration key and is what callers actually want. The routing
+  pipeline (the only in-tree consumer) has been updated accordingly.
+
 ## 0.3.0 — 2026-05-09
 
 ### Added

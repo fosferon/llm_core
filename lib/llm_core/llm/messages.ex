@@ -44,11 +44,7 @@ defmodule LlmCore.LLM.Messages do
   def render_cli_prompt(prompt) when is_list(prompt) do
     prompt
     |> Enum.filter(&valid_message?/1)
-    |> Enum.map(fn msg ->
-      role = msg[:role] || msg["role"]
-      content = msg[:content] || msg["content"]
-      "[#{role_to_string(role)}] #{content}"
-    end)
+    |> Enum.map(&render_cli_message/1)
     |> Enum.join("\n")
   end
 
@@ -102,6 +98,38 @@ defmodule LlmCore.LLM.Messages do
   end
 
   def valid_message?(_), do: false
+
+  defp render_cli_message(msg) do
+    role = msg[:role] || msg["role"]
+    content = msg[:content] || msg["content"] || ""
+    tool_call_id = Map.get(msg, :tool_call_id) || Map.get(msg, "tool_call_id")
+
+    base =
+      case {role_to_string(role), tool_call_id} do
+        {"tool", id} when is_binary(id) -> "[tool id=#{id}] #{content}"
+        {role_name, _} -> "[#{role_name}] #{content}"
+      end
+
+    case Map.get(msg, :tool_calls) || Map.get(msg, "tool_calls") do
+      calls when is_list(calls) and calls != [] ->
+        payload =
+          Enum.map(calls, fn call ->
+            %{
+              "id" => Map.get(call, :id) || Map.get(call, "id"),
+              "name" => Map.get(call, :name) || Map.get(call, "name"),
+              "arguments" => Map.get(call, :arguments) || Map.get(call, "arguments") || %{}
+            }
+          end)
+
+        base <>
+          "\n```llm_core_tool_calls\n" <>
+          Jason.encode!(%{"tool_calls" => payload}) <>
+          "\n```"
+
+      _ ->
+        base
+    end
+  end
 
   defp role_to_string(role) when role in [:system, :user, :assistant, :tool],
     do: Atom.to_string(role)

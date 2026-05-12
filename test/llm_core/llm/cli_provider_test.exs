@@ -879,6 +879,178 @@ defmodule LlmCore.LLM.CLIProviderTest do
     end
   end
 
+  # ── Tool Call Transport (CLI Tool Bridge) ──────────────────
+
+  describe "tool_call_transport: :llm_core_json" do
+    setup do
+      config = %CLIProvider.Config{
+        name: :bridge_test,
+        binary: "cat",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :flagged,
+        prompt_flag: "--prompt",
+        prompt_transport: :flagged,
+        system_prompt_transport: :file_flag,
+        flags: %{system_prompt_file: "--agent-file"},
+        system_prompt_file_transform: :agent_spec_yaml,
+        tool_call_transport: :llm_core_json
+      }
+
+      provider = CLIProvider.from_config(config)
+      {:ok, provider: provider}
+    end
+
+    test "injects tool bridge into system prompt via agent file", %{provider: provider} do
+      tool = %LlmToolkit.Tool{
+        name: "gc_mcpclient",
+        description: "MCP client proxy",
+        parameters: %{"type" => "object"}
+      }
+
+      plan =
+        CLIProvider.invocation_plan(provider, "List tools",
+          system_prompt: "You are Pluto.",
+          agent_name: "pluto",
+          tools: [tool]
+        )
+
+      agent_file_flag = "--agent-file"
+      idx = Enum.find_index(plan.args, &(&1 == agent_file_flag))
+      agent_file = Enum.at(plan.args, idx + 1)
+      system_md = Path.join(Path.dirname(agent_file), "system.md")
+      contents = File.read!(system_md)
+
+      assert contents =~ "[LLM_CORE TOOL BRIDGE]"
+      assert contents =~ "llm_core_tool_call"
+      assert contents =~ "gc_mcpclient"
+      assert contents =~ "MCP client proxy"
+
+      File.rm_rf!(Path.dirname(agent_file))
+    end
+
+    test "does not inject bridge when no tools provided", %{provider: provider} do
+      plan =
+        CLIProvider.invocation_plan(provider, "Hello",
+          system_prompt: "You are helpful."
+        )
+
+      agent_file_flag = "--agent-file"
+      idx = Enum.find_index(plan.args, &(&1 == agent_file_flag))
+      agent_file = Enum.at(plan.args, idx + 1)
+      system_md = Path.join(Path.dirname(agent_file), "system.md")
+      contents = File.read!(system_md)
+
+      refute contents =~ "[LLM_CORE TOOL BRIDGE]"
+      assert contents =~ "You are helpful."
+
+      File.rm_rf!(Path.dirname(agent_file))
+    end
+
+    test "parses single tool call from response", %{provider: provider} do
+      response =
+        CLIProvider.build_response(
+          provider,
+          """
+          ```llm_core_tool_call
+          {"name":"gc_mcpclient","arguments":{"action":"servers"}}
+          ```
+          """,
+          model: "test"
+        )
+
+      assert response.content == ""
+
+      assert [%LlmToolkit.Tool.Call{name: "gc_mcpclient", arguments: %{"action" => "servers"}}] =
+               response.tool_calls
+    end
+
+    test "parses multiple tool calls from response", %{provider: provider} do
+      response =
+        CLIProvider.build_response(
+          provider,
+          """
+          ```llm_core_tool_calls
+          {"tool_calls":[{"name":"tool_a","arguments":{"x":1}},{"name":"tool_b","arguments":{}}]}
+          ```
+          """,
+          model: "test"
+        )
+
+      assert response.content == ""
+      assert length(response.tool_calls) == 2
+      assert Enum.map(response.tool_calls, & &1.name) == ["tool_a", "tool_b"]
+    end
+
+    test "returns nil tool_calls when no fenced block present", %{provider: provider} do
+      response = CLIProvider.build_response(provider, "Just a plain text answer.", model: "test")
+
+      assert response.content == "Just a plain text answer."
+      assert response.tool_calls == nil
+    end
+
+    test "preserves text outside fenced block", %{provider: provider} do
+      response =
+        CLIProvider.build_response(
+          provider,
+          """
+          Some preamble text.
+          ```llm_core_tool_call
+          {"name":"test_tool","arguments":{}}
+          ```
+          Some trailing text.
+          """,
+          model: "test"
+        )
+
+      assert response.content =~ "Some preamble text."
+      assert response.content =~ "Some trailing text."
+      assert [%LlmToolkit.Tool.Call{name: "test_tool"}] = response.tool_calls
+    end
+  end
+
+  describe "tool_call_transport: nil (no bridge)" do
+    test "does not parse fenced blocks when transport is nil" do
+      config = %CLIProvider.Config{
+        name: :no_bridge,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        tool_call_transport: nil
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      response =
+        CLIProvider.build_response(
+          provider,
+          """
+          ```llm_core_tool_call
+          {"name":"test","arguments":{}}
+          ```
+          """,
+          []
+        )
+
+      assert response.tool_calls == nil
+      assert response.content =~ "llm_core_tool_call"
+    end
+  end
+
+  describe "tool_call_transport config loading" do
+    test "kimi_cli config has tool_call_transport set" do
+      assert {:ok, config} = CLIProvider.config(:kimi_cli)
+      assert config.tool_call_transport == :llm_core_json
+    end
+
+    test "claude_code config has nil tool_call_transport" do
+      assert {:ok, config} = CLIProvider.config(:claude_code)
+      assert config.tool_call_transport == nil
+    end
+  end
+
   # ── Helper to call private functions for testing ──────────
 
   defp send(provider, function, args) do
