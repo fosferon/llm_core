@@ -9,7 +9,7 @@ All notable changes to this project will be documented in this file.
   errors when multiple provider definitions share a backing module (e.g. `openai`
   and `zai` both backed by `LlmCore.LLM.OpenAI`, or multiple Ollama-backed
   personas). Capability lookup is now keyed by the resolved provider **alias**
-  rather than the (non-unique) module. (GC-1279)
+  rather than the (non-unique) module.
 
 ### Changed
 - **Breaking:** `LlmCore.Provider.Registry.lookup_by_module/1` has been replaced
