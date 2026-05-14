@@ -140,6 +140,31 @@ defmodule LlmCore.LLM.Provider do
   @callback available?() :: boolean()
 
   @doc """
+  Checks if the provider is available, given the resolved auth configuration.
+
+  Optional callback. When implemented, the config loader will call this
+  instead of `available?/0`, passing the resolved auth map from TOML config.
+  This allows providers that are backed by shared modules (e.g., OpenAI
+  backing zai) to check the TOML-configured `api_key_env` rather than
+  their hardcoded default.
+
+  The `auth` map contains keys like `"api_key_env"`, `"api_key_present"`,
+  `"source"`, etc.
+
+  Providers that perform non-key checks (e.g., health endpoints) should
+  *not* implement this callback — the loader will fall back to `available?/0`
+  automatically.
+
+  ## Returns
+
+    * `true` - Provider is available with the given auth config
+    * `false` - Provider is not available
+  """
+  @callback available?(auth :: map()) :: boolean()
+
+  @optional_callbacks [available?: 1]
+
+  @doc """
   Returns a map describing the provider's capabilities.
 
   This allows the system to make intelligent decisions about

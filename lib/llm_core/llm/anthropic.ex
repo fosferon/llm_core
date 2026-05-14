@@ -23,6 +23,25 @@ defmodule LlmCore.LLM.Anthropic do
   end
 
   @doc """
+  Checks availability using the TOML-resolved auth config.
+
+  When a provider alias reuses this module with a different `api_key_env`,
+  this callback checks the correct env var instead of the hardcoded
+  `ANTHROPIC_API_KEY` default.
+  """
+  @impl true
+  @spec available?(map()) :: boolean()
+  def available?(%{"api_key_env" => env} = auth) when is_binary(env) do
+    if auth["api_key_present"] == true do
+      true
+    else
+      api_key() not in [nil, ""]
+    end
+  end
+
+  def available?(_auth), do: available?()
+
+  @doc """
   Returns Anthropic's capability map including streaming, structured output,
   tool use, and supported models.
   """

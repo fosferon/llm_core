@@ -52,6 +52,25 @@ defmodule LlmCore.LLM.OpenAI do
   end
 
   @doc """
+  Checks availability using the TOML-resolved auth config.
+
+  When a provider alias (e.g. zai) reuses this module with a different
+  `api_key_env`, this callback checks the correct env var instead of
+  the hardcoded `OPENAI_API_KEY` default.
+  """
+  @impl true
+  @spec available?(map()) :: boolean()
+  def available?(%{"api_key_env" => env} = auth) when is_binary(env) do
+    if auth["api_key_present"] == true do
+      true
+    else
+      api_key() not in [nil, ""]
+    end
+  end
+
+  def available?(_auth), do: available?()
+
+  @doc """
   Returns the OpenAI capability map including streaming, structured output,
   tool use, vision, and supported models.
   """

@@ -722,13 +722,16 @@ defmodule LlmCore.Config.Loader do
       auth["api_key_present"] == false ->
         {false, {:error, :missing_credentials}}
 
-      auth["api_key_present"] == true ->
-        # Auth config already validated the correct env var for this provider.
-        # Skip module.available?() — shared modules (e.g. OpenAI backing zai)
-        # check their own hardcoded env var, not the TOML-configured one.
-        {true, :ok}
+      function_exported?(module, :available?, 1) ->
+        # Provider implements available?/1 — pass resolved auth so it checks
+        # the TOML-configured env var, not a hardcoded default.
+        case module.available?(auth) do
+          true -> {true, :ok}
+          false -> {false, {:error, :provider_unavailable}}
+        end
 
       function_exported?(module, :available?, 0) ->
+        # Provider only implements available?/0 — call as-is.
         case module.available?() do
           true -> {true, :ok}
           false -> {false, {:error, :provider_unavailable}}
