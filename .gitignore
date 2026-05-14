@@ -47,3 +47,4 @@ llm_core-*.tar
 /.serena/
 /.swarm/
 .mcp.json
+.logs
