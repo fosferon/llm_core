@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.2 — 2026-05-14
+
+### Fixed
+- Proper fix for shared-module provider availability (e.g. `zai` backed by
+  `LlmCore.LLM.OpenAI` with a custom `api_key_env`). Adds an optional
+  `available?/1` callback to `LlmCore.LLM.Provider` that receives the
+  TOML-resolved auth map, so the correct env var is checked instead of the
+  module's hardcoded default. Providers that perform health checks (Ollama,
+  Appliance) are unaffected — they keep using `available?/0`.
+
 ## 0.3.1 — 2026-05-11
 
 ### Fixed
