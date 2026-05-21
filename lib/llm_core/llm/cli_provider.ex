@@ -27,6 +27,9 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `cwd_flag` — optional explicit cwd flag for capability introspection
     * `add_dir_flag` — optional explicit add-dir flag for capability introspection
     * `output_mode` — optional output mode (`:stdout_text`, `:final_message_only`, `:json`)
+    * `output_event_format` — optional machine-readable stdout event format (`:jsonl`)
+    * `output_event_select` — optional JSON event selector map
+    * `output_event_text_path` — optional JSON path to text chunks
     * `non_interactive_args` — optional args enabling non-interactive execution
     * `auto_approve_args` — optional args enabling unattended execution
     * `sandbox_bypass_args` — optional args for stronger sandbox/approval bypass
@@ -69,6 +72,11 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `output_strip_patterns` — list of regex pattern strings applied to stdout
       output to strip banners, session noise, or decorators before building the
       response. Applied only to stdout-based output (not file capture).
+    * `output_event_format` / `output_event_select` / `output_event_text_path` —
+      optional structured stdout extraction contract. When `output_mode` is
+      `:json` and `output_event_format` is `:jsonl`, stdout is parsed line by
+      line, matching events are selected, and text chunks are concatenated. If
+      nothing is extracted, raw stdout is used as a safe fallback.
     * `tool_call_transport` — optional provider-agnostic tool bridge used for
       CLIs that do not natively expose structured tool calls. When set,
       llm_core injects tool-call instructions into the system prompt and parses
@@ -94,6 +102,9 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           cwd_flag: String.t() | nil,
           add_dir_flag: String.t() | nil,
           output_mode: :stdout_text | :final_message_only | :json | nil,
+          output_event_format: :jsonl | nil,
+          output_event_select: map(),
+          output_event_text_path: [String.t()],
           non_interactive_args: [String.t()],
           auto_approve_args: [String.t()],
           sandbox_bypass_args: [String.t()],
@@ -117,6 +128,7 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     :cwd_flag,
     :add_dir_flag,
     :output_mode,
+    :output_event_format,
     :system_prompt_file_transform,
     :output_file_flag,
     :tool_call_transport,
@@ -133,6 +145,8 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     sandbox_bypass_args: [],
     preflight: %{},
     file_transform_defaults: %{},
+    output_event_select: %{},
+    output_event_text_path: [],
     output_strip_patterns: []
   ]
 end
@@ -401,6 +415,7 @@ defmodule LlmCore.LLM.CLIProvider do
       },
       output: %{
         mode: effective_output_mode(cfg),
+        event_format: cfg.output_event_format,
         file_capture: is_binary(cfg.output_file_flag),
         strip_patterns: cfg.output_strip_patterns != []
       },
@@ -587,7 +602,8 @@ defmodule LlmCore.LLM.CLIProvider do
   @doc "Builds a Response struct from CLI output, applying any configured normalization."
   @spec build_response(t(), String.t(), keyword()) :: Response.t()
   def build_response(%__MODULE__{config: cfg}, output, opts) do
-    normalized = normalize_output(output, cfg)
+    extracted = extract_output(output, cfg)
+    normalized = normalize_output(extracted, cfg)
     {content, tool_calls} = maybe_decode_tool_calls(normalized, cfg)
 
     Response.new(
@@ -1058,6 +1074,71 @@ defmodule LlmCore.LLM.CLIProvider do
   end
 
   def normalize_output(output, _config), do: output
+
+  defp extract_output(output, %Config{} = cfg) when is_binary(output) do
+    case {effective_output_mode(cfg), cfg.output_event_format} do
+      {:json, :jsonl} -> extract_jsonl_event_output(output, cfg)
+      _ -> output
+    end
+  end
+
+  defp extract_jsonl_event_output(
+         output,
+         %Config{
+           output_event_select: select,
+           output_event_text_path: text_path
+         }
+       ) do
+    chunks =
+      output
+      |> String.split(~r/\R/, trim: false)
+      |> Enum.flat_map(fn line ->
+        line = line |> strip_ansi() |> String.trim()
+
+        with false <- line == "",
+             {:ok, event} <- Jason.decode(line),
+             true <- output_event_matches?(event, select),
+             {:ok, text} <- fetch_output_event_text(event, text_path) do
+          [text]
+        else
+          _ -> []
+        end
+      end)
+
+    case chunks do
+      [] -> output
+      _ -> chunks |> IO.iodata_to_binary() |> strip_ansi()
+    end
+  end
+
+  defp output_event_matches?(event, select) when is_map(event) and is_map(select) do
+    Enum.all?(select, fn {key, expected} ->
+      Map.get(event, to_string(key)) == expected
+    end)
+  end
+
+  defp output_event_matches?(_event, _select), do: false
+
+  defp fetch_output_event_text(_event, []), do: :error
+
+  defp fetch_output_event_text(event, path) when is_list(path) do
+    Enum.reduce_while(path, event, fn key, acc ->
+      case acc do
+        %{} -> {:cont, Map.get(acc, to_string(key))}
+        _ -> {:halt, nil}
+      end
+    end)
+    |> case do
+      text when is_binary(text) -> {:ok, text}
+      _ -> :error
+    end
+  end
+
+  defp fetch_output_event_text(_event, _path), do: :error
+
+  defp strip_ansi(text) when is_binary(text) do
+    Regex.replace(~r/\e\[[0-9;?]*[ -\/]*[@-~]/, text, "")
+  end
 
   defp maybe_append_profile_args(args, profile_args, true) when is_list(profile_args),
     do: args ++ profile_args

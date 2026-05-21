@@ -415,6 +415,51 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert length(providers["strip_test"].cli_config.output_strip_patterns) == 2
     end
 
+    test "loads JSONL output event extraction fields from TOML" do
+      config_path = temp_path("cli_output_events.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.event_test]
+      type = "cli"
+      enabled = true
+
+      [providers.event_test.cli]
+      binary = "echo"
+      output_mode = "json"
+      output_event_format = "jsonl"
+      output_event_select = { type = "text" }
+      output_event_text_path = ["part", "text"]
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      assert Map.has_key?(providers, "event_test")
+
+      cfg = providers["event_test"].cli_config
+      assert cfg.output_mode == :json
+      assert cfg.output_event_format == :jsonl
+      assert cfg.output_event_select == %{"type" => "text"}
+      assert cfg.output_event_text_path == ["part", "text"]
+    end
+
+    test "rejects invalid output_event_format" do
+      config_path = temp_path("cli_bad_output_events.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.bad_event_test]
+      type = "cli"
+      enabled = true
+
+      [providers.bad_event_test.cli]
+      binary = "echo"
+      output_event_format = "xml_stream"
+      """)
+
+      assert {:ok, providers} = Loader.reload_providers(path: config_path)
+      refute Map.has_key?(providers, "bad_event_test")
+    end
+
     test "new fields default to nil/empty when not specified" do
       config_path = temp_path("cli_defaults.toml")
       on_exit(fn -> File.rm_rf(config_path) end)
@@ -433,6 +478,9 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert cfg.system_prompt_file_transform == nil
       assert cfg.file_transform_defaults == %{}
       assert cfg.output_file_flag == nil
+      assert cfg.output_event_format == nil
+      assert cfg.output_event_select == %{}
+      assert cfg.output_event_text_path == []
       assert cfg.output_strip_patterns == []
     end
 

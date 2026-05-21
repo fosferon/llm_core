@@ -353,6 +353,7 @@ defmodule LlmCore.Config.Loader do
   @valid_prompt_transports ~w(last flagged stdin)
   @valid_system_prompt_transports ~w(flag file_flag inline_fallback unsupported)
   @valid_output_modes ~w(stdout_text final_message_only json)
+  @valid_output_event_formats ~w(jsonl)
   @valid_file_transforms ~w(agent_spec_yaml)
   @valid_tool_call_transports ~w(llm_core_json)
   @valid_model_resolutions ~w(gc_default provider_runtime explicit_only)
@@ -388,6 +389,11 @@ defmodule LlmCore.Config.Loader do
             cwd_flag: blank_to_nil(Map.get(attrs, "cwd_flag")),
             add_dir_flag: blank_to_nil(Map.get(attrs, "add_dir_flag")),
             output_mode: safe_to_atom_or_nil(Map.get(attrs, "output_mode")),
+            output_event_format: safe_to_atom_or_nil(Map.get(attrs, "output_event_format")),
+            output_event_select:
+              normalize_output_event_select(Map.get(attrs, "output_event_select", %{})),
+            output_event_text_path:
+              normalize_output_event_text_path(Map.get(attrs, "output_event_text_path", [])),
             non_interactive_args: List.wrap(Map.get(attrs, "non_interactive_args", [])),
             auto_approve_args: List.wrap(Map.get(attrs, "auto_approve_args", [])),
             sandbox_bypass_args: List.wrap(Map.get(attrs, "sandbox_bypass_args", [])),
@@ -415,6 +421,7 @@ defmodule LlmCore.Config.Loader do
       {"system_prompt_transport", Map.get(attrs, "system_prompt_transport"),
        @valid_system_prompt_transports},
       {"output_mode", Map.get(attrs, "output_mode"), @valid_output_modes},
+      {"output_event_format", Map.get(attrs, "output_event_format"), @valid_output_event_formats},
       {"tool_call_transport", Map.get(attrs, "tool_call_transport"), @valid_tool_call_transports},
       {"model_resolution", Map.get(attrs, "model_resolution"), @valid_model_resolutions},
       {"system_prompt_file_transform", Map.get(attrs, "system_prompt_file_transform"),
@@ -504,6 +511,18 @@ defmodule LlmCore.Config.Loader do
   end
 
   defp normalize_file_transform_defaults(_), do: %{}
+
+  defp normalize_output_event_select(select) when is_map(select) do
+    Map.new(select, fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp normalize_output_event_select(_), do: %{}
+
+  defp normalize_output_event_text_path(path) when is_list(path) do
+    Enum.map(path, &to_string/1)
+  end
+
+  defp normalize_output_event_text_path(_), do: []
 
   defp maybe_put_list(map, _key, nil), do: map
   defp maybe_put_list(map, key, list) when is_list(list), do: Map.put(map, key, list)

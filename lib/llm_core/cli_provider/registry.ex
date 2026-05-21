@@ -188,6 +188,7 @@ defmodule LlmCore.CLIProvider.Registry do
       stdin_hack: config.stdin_hack,
       prompt_position: config.prompt_position,
       output_mode: config.output_mode,
+      output_event_format: config.output_event_format,
       default_timeout: config.default_timeout
     }
   end

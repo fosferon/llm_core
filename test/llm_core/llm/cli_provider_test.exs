@@ -188,6 +188,28 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert args == ["explain code"]
     end
 
+    test "prefix args render before last positional prompt" do
+      config = %CLIProvider.Config{
+        name: :prefix_order,
+        binary: "opencode",
+        subcommand: "run",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        prompt_position: :last,
+        prefix_args: ["--format", "json"]
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      assert CLIProvider.build_args(provider, "say ok", []) == [
+               "run",
+               "--format",
+               "json",
+               "say ok"
+             ]
+    end
+
     test "pi_cli builds args with --print and provider/model flags" do
       provider = CLIProvider.from_config(:pi_cli)
 
@@ -352,6 +374,82 @@ defmodule LlmCore.LLM.CLIProviderTest do
       response = CLIProvider.build_response(provider, "output", [])
 
       assert response.model == "claude-opus-4-6"
+    end
+
+    test "extracts text chunks from JSONL event output when opted in" do
+      config = %CLIProvider.Config{
+        name: :jsonl_events,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_mode: :json,
+        output_event_format: :jsonl,
+        output_event_select: %{"type" => "text"},
+        output_event_text_path: ["part", "text"]
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      output =
+        [
+          "\e[0m\n> build · glm-5.1\n\e[0m",
+          Jason.encode!(%{"type" => "step_start"}),
+          "\n",
+          Jason.encode!(%{"type" => "text", "part" => %{"text" => "Hello \e[31m"}}),
+          "\nnot json\n",
+          Jason.encode!(%{"type" => "text", "part" => %{"text" => "world"}}),
+          "\n",
+          Jason.encode!(%{"type" => "step_finish"})
+        ]
+        |> IO.iodata_to_binary()
+
+      response = CLIProvider.build_response(provider, output, [])
+
+      assert response.content == "Hello world"
+      assert response.raw.output == output
+    end
+
+    test "falls back to raw output when JSONL extraction yields no text" do
+      config = %CLIProvider.Config{
+        name: :jsonl_no_match,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_mode: :json,
+        output_event_format: :jsonl,
+        output_event_select: %{"type" => "text"},
+        output_event_text_path: ["part", "text"]
+      }
+
+      provider = CLIProvider.from_config(config)
+      output = "{bad json\n#{Jason.encode!(%{"type" => "step_finish"})}\n"
+
+      response = CLIProvider.build_response(provider, output, [])
+
+      assert response.content == String.trim(output)
+    end
+
+    test "stdout_text mode ignores JSONL extraction config" do
+      config = %CLIProvider.Config{
+        name: :stdout_compat,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "v1",
+        output_mode: :stdout_text,
+        output_event_format: :jsonl,
+        output_event_select: %{"type" => "text"},
+        output_event_text_path: ["part", "text"]
+      }
+
+      provider = CLIProvider.from_config(config)
+      output = Jason.encode!(%{"type" => "text", "part" => %{"text" => "extracted"}})
+
+      response = CLIProvider.build_response(provider, output, [])
+
+      assert response.content == output
     end
   end
 
@@ -853,6 +951,9 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       assert config.system_prompt_file_transform == nil
       assert config.output_file_flag == nil
+      assert config.output_event_format == nil
+      assert config.output_event_select == %{}
+      assert config.output_event_text_path == []
       assert config.output_strip_patterns == []
     end
 
@@ -864,6 +965,9 @@ defmodule LlmCore.LLM.CLIProviderTest do
         default_timeout: 5_000,
         default_model: "v1",
         output_file_flag: "--output-last-message",
+        output_event_format: :jsonl,
+        output_event_select: %{"type" => "text"},
+        output_event_text_path: ["part", "text"],
         output_strip_patterns: ["^noise"],
         system_prompt_file_transform: :agent_spec_yaml,
         flags: %{system_prompt_file: "--agent-file"},
@@ -874,6 +978,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
       caps = CLIProvider.capabilities(provider)
 
       assert get_in(caps, [:output, :file_capture]) == true
+      assert get_in(caps, [:output, :event_format]) == :jsonl
       assert get_in(caps, [:output, :strip_patterns]) == true
       assert get_in(caps, [:persona, :file_transform]) == :agent_spec_yaml
     end
@@ -932,9 +1037,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
     test "does not inject bridge when no tools provided", %{provider: provider} do
       plan =
-        CLIProvider.invocation_plan(provider, "Hello",
-          system_prompt: "You are helpful."
-        )
+        CLIProvider.invocation_plan(provider, "Hello", system_prompt: "You are helpful.")
 
       agent_file_flag = "--agent-file"
       idx = Enum.find_index(plan.args, &(&1 == agent_file_flag))

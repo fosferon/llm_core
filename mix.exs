@@ -54,14 +54,37 @@ defmodule LlmCore.MixProject do
       ],
       groups_for_modules: [
         "Public API": [LlmCore],
-        Providers: [LlmCore.LLM.Provider, LlmCore.LLM.CLIProvider, LlmCore.LLM.Response, LlmCore.LLM.Error],
-        Routing: [LlmCore.Router, LlmCore.Router.ResolvedRoute, LlmCore.Router.RoutingTable, LlmCore.Router.RouteEntry],
+        Providers: [
+          LlmCore.LLM.Provider,
+          LlmCore.LLM.CLIProvider,
+          LlmCore.LLM.Response,
+          LlmCore.LLM.Error
+        ],
+        Routing: [
+          LlmCore.Router,
+          LlmCore.Router.ResolvedRoute,
+          LlmCore.Router.RoutingTable,
+          LlmCore.Router.RouteEntry
+        ],
         Configuration: [LlmCore.Config.Store, LlmCore.Config.Loader, LlmCore.Config.Watcher],
-        "Agent Loop": [LlmCore.Agent, LlmCore.Agent.Loop, LlmCore.Agent.Context, LlmCore.Agent.Registry],
+        "Agent Loop": [
+          LlmCore.Agent,
+          LlmCore.Agent.Loop,
+          LlmCore.Agent.Context,
+          LlmCore.Agent.Registry
+        ],
         "Structured Output": [LlmCore.Structured],
         Memory: [LlmCore.Memory.Hindsight],
-        Registries: [LlmCore.Provider.Registry, LlmCore.Provider.Definition, LlmCore.CLIProvider.Registry],
-        Pipelines: [LlmCore.Pipelines.InferencePipeline, LlmCore.Pipelines.RoutingPipeline, LlmCore.Pipelines.MemoryPipeline]
+        Registries: [
+          LlmCore.Provider.Registry,
+          LlmCore.Provider.Definition,
+          LlmCore.CLIProvider.Registry
+        ],
+        Pipelines: [
+          LlmCore.Pipelines.InferencePipeline,
+          LlmCore.Pipelines.RoutingPipeline,
+          LlmCore.Pipelines.MemoryPipeline
+        ]
       ]
     ]
   end
