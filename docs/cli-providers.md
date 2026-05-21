@@ -130,8 +130,37 @@ Supported transforms:
 
 | Field | Purpose |
 |-------|---------|
+| `output_mode` | How to capture output: `"stdout_text"` (default), `"final_message_only"`, or `"json"` |
 | `output_file_flag` | CLI flag that writes the final response to a file (e.g. `"--output-last-message"` for Codex) |
 | `output_strip_patterns` | Regex patterns stripped from stdout before building the response |
+
+### JSONL Event Extraction
+
+Some CLIs emit structured JSON events (one per line) to stdout. When `output_mode = "json"` and `output_event_format = "jsonl"`, LlmCore parses each line, selects matching events, and concatenates text chunks into a single response. If no events match, raw stdout is used as a fallback.
+
+```toml
+[providers.my_tool.cli]
+output_mode = "json"
+output_event_format = "jsonl"
+
+# Select events where type == "assistant" and role == "text"
+[providers.my_tool.cli.output_event_select]
+type = "assistant"
+role = "text"
+
+# Navigate into the JSON object to find the text content
+# e.g. {"type":"assistant","message":{"content":"Hello"}}
+# would use output_event_text_path = ["message", "content"]
+output_event_text_path = ["message", "content"]
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `output_event_format` | No | Currently only `"jsonl"` is supported. Activates line-by-line JSON parsing when `output_mode` is `"json"`. |
+| `output_event_select` | No | Map of key-value pairs. An event must match **all** entries to be selected. |
+| `output_event_text_path` | No | List of keys to navigate into the event JSON and extract the text string. |
+
+ANSI escape codes are stripped from each line before JSON parsing. Non-JSON lines and lines that don't match the selector are silently skipped.
 
 ### Preflight Checks
 
@@ -185,6 +214,6 @@ Registry.available()
 
 - `binary` is required and must be a non-empty string
 - `prompt_position = "flagged"` requires `prompt_flag` to be set
-- Enum fields are validated: `prompt_position`, `prompt_transport`, `system_prompt_transport`, `output_mode`, `system_prompt_file_transform`
+- Enum fields are validated: `prompt_position`, `prompt_transport`, `system_prompt_transport`, `output_mode`, `output_event_format`, `system_prompt_file_transform`
 - `default_model` must be a real model identifier, not a provider name or binary name
 - Invalid configs are skipped with a warning (same as module providers)

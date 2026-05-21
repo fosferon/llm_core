@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.4.0 — 2026-05-21
+
+### Added
+- JSONL event output extraction for CLI providers (`output_event_format`,
+  `output_event_select`, `output_event_text_path`). When a CLI emits
+  structured JSON events to stdout, LlmCore can now parse them line by
+  line, select matching events, and concatenate text chunks into a
+  response — with automatic fallback to raw stdout.
+- Documented JSONL event extraction in the CLI Providers guide.
+
 ## 0.3.2 — 2026-05-14
 
 ### Fixed
