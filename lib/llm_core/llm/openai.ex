@@ -41,6 +41,7 @@ defmodule LlmCore.LLM.OpenAI do
   @default_timeout 60_000
   @default_base_url "https://api.openai.com/v1"
   @completions_path "/chat/completions"
+  @type stream_event :: String.t() | {:usage, map()} | {:error, Error.t()}
 
   @doc """
   Checks if an OpenAI-compatible API key is configured.
@@ -158,14 +159,7 @@ defmodule LlmCore.LLM.OpenAI do
     content = get_in(body, ["choices", Access.at(0), "message", "content"])
     finish_reason = get_in(body, ["choices", Access.at(0), "finish_reason"])
 
-    usage =
-      case body["usage"] do
-        %{"prompt_tokens" => p, "completion_tokens" => c} ->
-          %{input_tokens: p, output_tokens: c, total_tokens: p + c}
-
-        _ ->
-          %{}
-      end
+    usage = usage_from_openai(body["usage"])
 
     tool_calls =
       if finish_reason == "tool_calls" do
@@ -203,13 +197,9 @@ defmodule LlmCore.LLM.OpenAI do
   end
 
   defp do_stream(prompt, opts, key) do
-    model = Keyword.get(opts, :model, "gpt-4o")
     url = completions_url(opts)
-
-    req_body =
-      %{model: model, messages: Messages.normalize_chat(prompt), stream: true}
-      |> maybe_put(:max_tokens, opts[:max_tokens])
-      |> maybe_put(:temperature, opts[:temperature])
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    req_body = build_stream_body(prompt, opts)
 
     headers = [
       {"Authorization", "Bearer #{key}"},
@@ -217,9 +207,10 @@ defmodule LlmCore.LLM.OpenAI do
     ]
 
     Stream.resource(
-      fn -> start_streaming_request(url, req_body, headers) end,
+      fn -> start_streaming_request(url, req_body, headers, timeout) end,
       fn
-        {:req_pid, ref} -> receive_chunks(ref)
+        {:req_pid, ref, usage_seen?} -> receive_chunks(ref, usage_seen?)
+        {:stream_error, error} -> {[{:error, error}], :done}
         :done -> {:halt, :done}
       end,
       fn _ -> :ok end
@@ -255,6 +246,22 @@ defmodule LlmCore.LLM.OpenAI do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
+  defp usage_from_openai(%{"prompt_tokens" => prompt, "completion_tokens" => completion} = usage) do
+    total = Map.get(usage, "total_tokens", prompt + completion)
+
+    %{
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      total_tokens: total
+    }
+  end
+
+  defp usage_from_openai(%{"total_tokens" => total}) do
+    %{total_tokens: total}
+  end
+
+  defp usage_from_openai(_), do: %{}
+
   @spec maybe_put_tools(map(), [LlmToolkit.Tool.t()] | nil) :: map()
   defp maybe_put_tools(body, nil), do: body
   defp maybe_put_tools(body, []), do: body
@@ -267,65 +274,137 @@ defmodule LlmCore.LLM.OpenAI do
   # Streaming internals
   # ---------------------------------------------------------------------------
 
-  defp start_streaming_request(url, body, headers) do
+  @doc false
+  @spec build_stream_body(LlmCore.LLM.Provider.prompt(), keyword()) :: map()
+  def build_stream_body(prompt, opts \\ []) do
+    model = Keyword.get(opts, :model, "gpt-4o")
+
+    %{model: model, messages: Messages.normalize_chat(prompt), stream: true}
+    |> Map.put(:stream_options, %{include_usage: true})
+    |> maybe_put(:max_tokens, opts[:max_tokens])
+    |> maybe_put(:temperature, opts[:temperature])
+  end
+
+  @doc false
+  @spec decode_stream_chunk(String.t(), boolean()) :: {[stream_event()], boolean(), boolean()}
+  def decode_stream_chunk(data, usage_seen? \\ false) when is_binary(data) do
+    {events, done?, usage_seen?} =
+      data
+      |> String.split("\n")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&LlmCore.LLM.SSEParser.parse_line/1)
+      |> Enum.reduce({[], false, usage_seen?}, fn
+        :done, {events, _done?, usage_seen?} ->
+          {events, true, usage_seen?}
+
+        {:ok, json}, {events, done?, usage_seen?} ->
+          case extract_stream_event(json) do
+            nil ->
+              {events, done?, usage_seen?}
+
+            {:usage, _usage} = event ->
+              {[event | events], done?, true}
+
+            event ->
+              {[event | events], done?, usage_seen?}
+          end
+
+        _other, acc ->
+          acc
+      end)
+
+    events = Enum.reverse(events)
+    events = if done? and not usage_seen?, do: events ++ [{:usage, %{}}], else: events
+
+    {events, done?, usage_seen?}
+  end
+
+  defp start_streaming_request(url, body, headers, timeout) do
     ref = make_ref()
     parent = self()
 
-    Task.start(fn ->
-      Req.post(url,
-        json: body,
-        headers: headers,
-        into: fn {:data, data}, {req, resp} ->
-          send(parent, {:stream_chunk, ref, data})
-          {:cont, {req, resp}}
-        end
-      )
+    case Task.start(fn ->
+           result =
+             Req.post(url,
+               json: body,
+               headers: headers,
+               receive_timeout: timeout,
+               into: fn {:data, data}, {req, resp} ->
+                 send(parent, {:stream_chunk, ref, data})
+                 {:cont, {req, resp}}
+               end
+             )
 
-      send(parent, {:stream_done, ref})
-    end)
+           case result do
+             {:ok, %Req.Response{status: status}} when status in 200..299 ->
+               send(parent, {:stream_done, ref})
 
-    {:req_pid, ref}
+             {:ok, %Req.Response{status: status, body: body}} ->
+               send(parent, {:stream_error, ref, provider_error(status, body)})
+
+             {:error, exception} ->
+               send(parent, {:stream_error, ref, connection_error(exception)})
+           end
+         end) do
+      {:ok, _pid} -> {:req_pid, ref, false}
+      {:error, reason} -> {:stream_error, connection_error(reason)}
+    end
   end
 
-  defp receive_chunks(ref) do
+  defp provider_error(status, body) do
+    Error.new(:provider_error,
+      message: "API error #{status}: #{error_message(body)}",
+      provider: :openai,
+      details: body
+    )
+  end
+
+  defp connection_error(%_{} = exception) do
+    Error.new(:connection, message: Exception.message(exception), provider: :openai)
+  end
+
+  defp connection_error(reason) do
+    Error.new(:connection, message: inspect(reason), provider: :openai)
+  end
+
+  defp receive_chunks(ref, usage_seen?) do
     receive do
       {:stream_chunk, ^ref, data} ->
-        chunks =
-          data
-          |> String.split("\n")
-          |> Enum.map(&String.trim/1)
-          |> Enum.reject(&(&1 == ""))
-          |> Enum.map(&LlmCore.LLM.SSEParser.parse_line/1)
-          |> Enum.filter(fn
-            {:ok, _} -> true
-            :done -> true
-            _ -> false
-          end)
+        {events, done?, usage_seen?} = decode_stream_chunk(data, usage_seen?)
+        next = if done?, do: :done, else: {:req_pid, ref, usage_seen?}
 
-        if Enum.any?(chunks, &(&1 == :done)) do
-          valid_content =
-            chunks
-            |> Enum.take_while(&(&1 != :done))
-            |> Enum.map(fn {:ok, json} -> extract_delta(json) end)
-            |> Enum.reject(&is_nil/1)
+        {events, next}
 
-          {valid_content, :done}
-        else
-          content =
-            chunks
-            |> Enum.map(fn {:ok, json} -> extract_delta(json) end)
-            |> Enum.reject(&is_nil/1)
-
-          {content, {:req_pid, ref}}
-        end
+      {:stream_error, ^ref, error} ->
+        {[{:error, error}], :done}
 
       {:stream_done, ^ref} ->
-        {:halt, :done}
+        if usage_seen? do
+          {:halt, :done}
+        else
+          {[{:usage, %{}}], :done}
+        end
     after
       @default_timeout -> {:halt, :done}
     end
   end
 
-  defp extract_delta(%{"choices" => [%{"delta" => %{"content" => content}} | _]}), do: content
-  defp extract_delta(_), do: nil
+  defp extract_stream_event(%{"choices" => [%{"delta" => %{"content" => content}} | _]})
+       when not is_nil(content),
+       do: content
+
+  defp extract_stream_event(%{"usage" => usage}) when not is_nil(usage),
+    do: {:usage, usage_from_openai(usage)}
+
+  defp extract_stream_event(%{"error" => error}),
+    do:
+      {:error,
+       Error.new(:provider_error,
+         message: error_message(%{"error" => error}),
+         provider: :openai,
+         details: error
+       )}
+
+  defp extract_stream_event(_), do: nil
 end
