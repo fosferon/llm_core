@@ -1,7 +1,7 @@
 defmodule LlmCore.MixProject do
   use Mix.Project
 
-  @version "0.4.1"
+  @version "0.4.2"
   @source_url "https://github.com/fosferon/llm_core"
 
   def project do
@@ -106,7 +106,7 @@ defmodule LlmCore.MixProject do
       {:earmark, "~> 1.4", only: :dev, runtime: false},
       {:mox, "~> 1.0", only: :test},
       {:stream_data, "~> 1.0", only: :test},
-      {:comm_bus, "~> 0.1"}
+      {:comm_bus, "~> 0.2"}
     ]
   end
 end
