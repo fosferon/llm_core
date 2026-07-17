@@ -66,6 +66,24 @@ defmodule LlmCore.LLM.Messages do
     maybe_put_tool_call_id(base, tool_call_id)
   end
 
+  # Assistant message carrying tool calls — preserve them in OpenAI wire shape.
+  # The generic role/content clause below ALSO matches this map (extra keys are
+  # ignored) and would silently DROP `tool_calls`, orphaning the following
+  # tool-result message (a tool_result with no preceding tool_use) so providers
+  # reject the whole conversation. Tool calls MUST round-trip on the assistant
+  # message that made them. (GC-2634)
+  defp normalize_message(%{role: :assistant, tool_calls: tool_calls} = msg)
+       when is_list(tool_calls) and tool_calls != [] do
+    %{"role" => "assistant", "content" => normalize_assistant_content(Map.get(msg, :content))}
+    |> Map.put("tool_calls", normalize_tool_calls(tool_calls))
+  end
+
+  defp normalize_message(%{"role" => "assistant", "tool_calls" => tool_calls} = msg)
+       when is_list(tool_calls) and tool_calls != [] do
+    %{"role" => "assistant", "content" => normalize_assistant_content(Map.get(msg, "content"))}
+    |> Map.put("tool_calls", normalize_tool_calls(tool_calls))
+  end
+
   defp normalize_message(%{role: role, content: content}) do
     %{"role" => role_to_string(role), "content" => content}
   end
@@ -76,6 +94,34 @@ defmodule LlmCore.LLM.Messages do
 
   defp maybe_put_tool_call_id(msg, nil), do: msg
   defp maybe_put_tool_call_id(msg, id), do: Map.put(msg, "tool_call_id", id)
+
+  # OpenAI allows `content: null` on an assistant message that carries
+  # tool_calls; normalize a missing/nil content to "" for gateway compatibility.
+  defp normalize_assistant_content(content) when is_binary(content), do: content
+  defp normalize_assistant_content(_), do: ""
+
+  defp normalize_tool_calls(calls), do: Enum.map(calls, &normalize_tool_call/1)
+
+  # Already in OpenAI wire shape — pass through untouched.
+  defp normalize_tool_call(%{"type" => "function", "function" => _} = call), do: call
+
+  # `LlmToolkit.Tool.Call` structs and generic id/name/arguments maps (atom or
+  # string keys) — both are plain maps here. OpenAI expects `function.arguments`
+  # as a JSON-encoded STRING; the internal Tool.Call carries a decoded map.
+  defp normalize_tool_call(call) when is_map(call) do
+    id = Map.get(call, :id) || Map.get(call, "id")
+    name = Map.get(call, :name) || Map.get(call, "name")
+    arguments = Map.get(call, :arguments) || Map.get(call, "arguments") || %{}
+
+    %{
+      "id" => id,
+      "type" => "function",
+      "function" => %{"name" => name, "arguments" => encode_tool_arguments(arguments)}
+    }
+  end
+
+  defp encode_tool_arguments(arguments) when is_binary(arguments), do: arguments
+  defp encode_tool_arguments(arguments), do: Jason.encode!(arguments)
 
   # ---------------------------------------------------------------------------
   # Validation
@@ -89,6 +135,17 @@ defmodule LlmCore.LLM.Messages do
   Tool-role messages are accepted with or without a `tool_call_id`.
   """
   @spec valid_message?(map()) :: boolean()
+  # An assistant message carrying tool calls is valid even when its content is
+  # nil/absent (a pure tool-call turn) — it must survive the filter so its
+  # tool_calls reach the wire. (GC-2634)
+  def valid_message?(%{role: :assistant, tool_calls: tool_calls})
+      when is_list(tool_calls) and tool_calls != [],
+      do: true
+
+  def valid_message?(%{"role" => "assistant", "tool_calls" => tool_calls})
+      when is_list(tool_calls) and tool_calls != [],
+      do: true
+
   def valid_message?(%{role: role, content: content})
       when role in [:system, :user, :assistant, :tool] and is_binary(content),
       do: true
