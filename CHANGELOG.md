@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.4.3 — 2026-07-17
+
+### Fixed
+- `LlmCore.LLM.Messages.normalize_chat/1` no longer drops `tool_calls` from
+  assistant messages. The generic role/content clause matched an assistant
+  message carrying `tool_calls` and kept only role+content, silently discarding
+  the calls. On a tool-call continuation this sent the following `tool` result
+  to the wire orphaned (a tool_result with no preceding tool_use), so providers
+  rejected the whole conversation — via OpenRouter → Anthropic surfacing as the
+  misleading "This model does not support assistant message prefill" 400, which
+  failed every tool-invoking turn. Assistant `tool_calls` are now preserved and
+  serialized to OpenAI wire shape (`[{id, type: "function", function: {name,
+  arguments}}]`, arguments JSON-encoded). `valid_message?/1` also accepts an
+  assistant message carrying `tool_calls` when its content is nil/absent, so a
+  pure tool-call turn survives filtering.
+
 ## 0.4.0 — 2026-05-21
 
 ### Added
