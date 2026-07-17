@@ -71,7 +71,7 @@ defmodule LlmCore.LLM.Messages do
   # ignored) and would silently DROP `tool_calls`, orphaning the following
   # tool-result message (a tool_result with no preceding tool_use) so providers
   # reject the whole conversation. Tool calls MUST round-trip on the assistant
-  # message that made them. (GC-2634)
+  # message that made them.
   defp normalize_message(%{role: :assistant, tool_calls: tool_calls} = msg)
        when is_list(tool_calls) and tool_calls != [] do
     %{"role" => "assistant", "content" => normalize_assistant_content(Map.get(msg, :content))}
@@ -137,7 +137,7 @@ defmodule LlmCore.LLM.Messages do
   @spec valid_message?(map()) :: boolean()
   # An assistant message carrying tool calls is valid even when its content is
   # nil/absent (a pure tool-call turn) — it must survive the filter so its
-  # tool_calls reach the wire. (GC-2634)
+  # tool_calls reach the wire.
   def valid_message?(%{role: :assistant, tool_calls: tool_calls})
       when is_list(tool_calls) and tool_calls != [],
       do: true
