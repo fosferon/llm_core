@@ -102,8 +102,12 @@ defmodule LlmCore.LLM.Messages do
 
   defp normalize_tool_calls(calls), do: Enum.map(calls, &normalize_tool_call/1)
 
-  # Already in OpenAI wire shape — pass through untouched.
-  defp normalize_tool_call(%{"type" => "function", "function" => _} = call), do: call
+  # Already in OpenAI wire shape — preserve it, but still enforce the
+  # function.arguments JSON string required by Chat Completions.
+  defp normalize_tool_call(%{"type" => "function", "function" => function} = call)
+       when is_map(function) do
+    Map.put(call, "function", normalize_tool_function(function))
+  end
 
   # `LlmToolkit.Tool.Call` structs and generic id/name/arguments maps (atom or
   # string keys) — both are plain maps here. OpenAI expects `function.arguments`
@@ -118,6 +122,16 @@ defmodule LlmCore.LLM.Messages do
       "type" => "function",
       "function" => %{"name" => name, "arguments" => encode_tool_arguments(arguments)}
     }
+  end
+
+  defp normalize_tool_function(function) do
+    name = Map.get(function, "name") || Map.get(function, :name)
+    arguments = Map.get(function, "arguments") || Map.get(function, :arguments) || %{}
+
+    function
+    |> Map.drop([:name, :arguments])
+    |> Map.put("name", name)
+    |> Map.put("arguments", encode_tool_arguments(arguments))
   end
 
   defp encode_tool_arguments(arguments) when is_binary(arguments), do: arguments
@@ -140,21 +154,51 @@ defmodule LlmCore.LLM.Messages do
   # tool_calls reach the wire.
   def valid_message?(%{role: :assistant, tool_calls: tool_calls})
       when is_list(tool_calls) and tool_calls != [],
-      do: true
+      do: valid_tool_calls?(tool_calls)
 
   def valid_message?(%{"role" => "assistant", "tool_calls" => tool_calls})
       when is_list(tool_calls) and tool_calls != [],
+      do: valid_tool_calls?(tool_calls)
+
+  def valid_message?(%{role: :assistant, content: content})
+      when is_binary(content),
+      do: true
+
+  def valid_message?(%{"role" => "assistant", "content" => content})
+      when is_binary(content),
       do: true
 
   def valid_message?(%{role: role, content: content})
-      when role in [:system, :user, :assistant, :tool] and is_binary(content),
+      when role in [:system, :user, :tool] and is_binary(content),
       do: true
 
   def valid_message?(%{"role" => role, "content" => content}) when is_binary(content) do
-    role in ["system", "user", "assistant", "tool"]
+    role in ["system", "user", "tool"]
   end
 
   def valid_message?(_), do: false
+
+  defp valid_tool_calls?([_first | _rest] = tool_calls),
+    do: Enum.all?(tool_calls, &valid_tool_call?/1)
+
+  defp valid_tool_calls?(_), do: false
+
+  defp valid_tool_call?(%{"type" => "function", "function" => function}) when is_map(function) do
+    function_name = Map.get(function, "name") || Map.get(function, :name)
+    arguments = Map.get(function, "arguments") || Map.get(function, :arguments)
+
+    is_binary(function_name) and valid_tool_arguments?(arguments)
+  end
+
+  defp valid_tool_call?(call) when is_map(call) do
+    name = Map.get(call, :name) || Map.get(call, "name")
+    is_binary(name)
+  end
+
+  defp valid_tool_call?(_), do: false
+
+  defp valid_tool_arguments?(arguments) when arguments in [nil, ""], do: true
+  defp valid_tool_arguments?(arguments), do: is_binary(arguments) or is_map(arguments)
 
   defp render_cli_message(msg) do
     role = msg[:role] || msg["role"]

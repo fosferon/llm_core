@@ -13,7 +13,7 @@ defmodule LlmCore.LLM.MessagesTest do
       assert [%{"role" => "user", "content" => "hi"}] = Messages.normalize_chat(messages)
     end
 
-    # GC-2634: the assistant message's tool_calls were silently dropped by the
+    # GC-2660: the assistant message's tool_calls were silently dropped by the
     # generic role/content clause, orphaning the following tool-result message
     # so providers (Anthropic via OpenRouter) rejected the whole conversation.
     test "preserves assistant tool_calls in OpenAI wire shape" do
@@ -44,31 +44,85 @@ defmodule LlmCore.LLM.MessagesTest do
       assert tc["type"] == "function"
       assert tc["function"]["name"] == "send_brochure"
       assert is_binary(tc["function"]["arguments"])
+
       assert Jason.decode!(tc["function"]["arguments"]) == %{
                "visitor_email" => "a@b.com",
                "variant" => "ceo"
              }
     end
 
-    test "assistant tool-call message with nil content survives filtering, content defaults to \"\"" do
+    test "pure assistant tool-call turn with nil content stays ordered with its tool result" do
       messages = [
+        %{role: :system, content: "sys"},
+        %{role: :user, content: "look up the account"},
         %{
           role: :assistant,
           content: nil,
-          tool_calls: [%LlmToolkit.Tool.Call{id: "c1", name: "t", arguments: %{}}]
-        }
+          tool_calls: [
+            %LlmToolkit.Tool.Call{
+              id: "call_lookup",
+              name: "lookup_account",
+              arguments: %{"id" => 123}
+            }
+          ]
+        },
+        %{role: :tool, tool_call_id: "call_lookup", content: ~s({"status":"active"})}
       ]
 
-      assert [%{"role" => "assistant", "content" => "", "tool_calls" => [_]}] =
-               Messages.normalize_chat(messages)
+      assert [
+               %{"role" => "system", "content" => "sys"},
+               %{"role" => "user", "content" => "look up the account"},
+               %{"role" => "assistant", "content" => "", "tool_calls" => [tc]},
+               %{
+                 "role" => "tool",
+                 "tool_call_id" => "call_lookup",
+                 "content" => ~s({"status":"active"})
+               }
+             ] = Messages.normalize_chat(messages)
+
+      assert tc["id"] == "call_lookup"
+      assert tc["function"]["name"] == "lookup_account"
+      assert Jason.decode!(tc["function"]["arguments"]) == %{"id" => 123}
     end
 
     test "already-wire-shaped tool_calls pass through unchanged" do
-      wire = %{"id" => "c1", "type" => "function", "function" => %{"name" => "t", "arguments" => "{}"}}
+      wire = %{
+        "id" => "c1",
+        "type" => "function",
+        "function" => %{"name" => "t", "arguments" => "{}"}
+      }
+
       messages = [%{"role" => "assistant", "content" => "hi", "tool_calls" => [wire]}]
 
       assert [%{"role" => "assistant", "content" => "hi", "tool_calls" => [^wire]}] =
                Messages.normalize_chat(messages)
+    end
+
+    test "already-wire-shaped tool_calls encode decoded map arguments" do
+      messages = [
+        %{
+          "role" => "assistant",
+          "content" => nil,
+          "tool_calls" => [
+            %{
+              "id" => "c1",
+              "type" => "function",
+              "function" => %{"name" => "t", "arguments" => %{"x" => 1}}
+            }
+          ]
+        }
+      ]
+
+      assert [%{"role" => "assistant", "content" => "", "tool_calls" => [tc]}] =
+               Messages.normalize_chat(messages)
+
+      assert is_binary(tc["function"]["arguments"])
+      assert Jason.decode!(tc["function"]["arguments"]) == %{"x" => 1}
+    end
+
+    test "malformed pure assistant tool-call messages are filtered instead of crashing" do
+      assert [%{"role" => "user", "content" => ""}] =
+               Messages.normalize_chat([%{role: :assistant, content: nil, tool_calls: [:bad]}])
     end
   end
 

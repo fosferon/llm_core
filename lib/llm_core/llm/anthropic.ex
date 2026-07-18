@@ -373,6 +373,18 @@ defmodule LlmCore.LLM.Anthropic do
     }
   end
 
+  defp normalize_message(%{
+         "role" => "assistant",
+         "content" => content,
+         "tool_calls" => tool_calls
+       })
+       when is_list(tool_calls) and tool_calls != [] do
+    %{
+      "role" => "assistant",
+      "content" => assistant_tool_use_blocks(content, tool_calls)
+    }
+  end
+
   defp normalize_message(%{"role" => role, "content" => content}) do
     %{
       "role" => normalize_role(role),
@@ -401,6 +413,41 @@ defmodule LlmCore.LLM.Anthropic do
   defp normalize_content_blocks(content) do
     [%{"type" => "text", "text" => to_string(content)}]
   end
+
+  defp assistant_tool_use_blocks(content, tool_calls) do
+    text_blocks =
+      content
+      |> normalize_content_blocks()
+      |> Enum.reject(&empty_text_block?/1)
+
+    text_blocks ++ Enum.map(tool_calls, &tool_use_block/1)
+  end
+
+  defp empty_text_block?(%{"type" => "text", "text" => text}), do: text == ""
+  defp empty_text_block?(_block), do: false
+
+  defp tool_use_block(%{"id" => id, "function" => function}) when is_map(function) do
+    %{
+      "type" => "tool_use",
+      "id" => id,
+      "name" => function["name"],
+      "input" => decode_tool_arguments(function["arguments"])
+    }
+  end
+
+  defp tool_use_block(_call) do
+    %{"type" => "tool_use", "id" => nil, "name" => "unknown", "input" => %{}}
+  end
+
+  defp decode_tool_arguments(arguments) when is_binary(arguments) do
+    case Jason.decode(arguments) do
+      {:ok, decoded} when is_map(decoded) -> decoded
+      _ -> %{}
+    end
+  end
+
+  defp decode_tool_arguments(arguments) when is_map(arguments), do: arguments
+  defp decode_tool_arguments(_arguments), do: %{}
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

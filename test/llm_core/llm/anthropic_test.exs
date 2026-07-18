@@ -42,6 +42,53 @@ defmodule LlmCore.LLM.AnthropicTest do
       assert [%{"role" => "user", "content" => _}] = payload["messages"]
     end
 
+    test "converts assistant tool calls and tool results to Anthropic content blocks" do
+      payload =
+        Anthropic.build_payload([
+          %{role: :user, content: "look up the account"},
+          %{
+            role: :assistant,
+            content: nil,
+            tool_calls: [
+              %LlmToolkit.Tool.Call{
+                id: "call_lookup",
+                name: "lookup_account",
+                arguments: %{"id" => 123}
+              }
+            ]
+          },
+          %{role: :tool, tool_call_id: "call_lookup", content: ~s({"status":"active"})}
+        ])
+
+      assert [
+               %{
+                 "role" => "user",
+                 "content" => [%{"type" => "text", "text" => "look up the account"}]
+               },
+               %{
+                 "role" => "assistant",
+                 "content" => [
+                   %{
+                     "type" => "tool_use",
+                     "id" => "call_lookup",
+                     "name" => "lookup_account",
+                     "input" => %{"id" => 123}
+                   }
+                 ]
+               },
+               %{
+                 "role" => "user",
+                 "content" => [
+                   %{
+                     "type" => "tool_result",
+                     "tool_use_id" => "call_lookup",
+                     "content" => ~s({"status":"active"})
+                   }
+                 ]
+               }
+             ] = payload["messages"]
+    end
+
     test "embeds json schema response formats" do
       schema = %{type: "object", properties: %{answer: %{type: "string"}}}
 

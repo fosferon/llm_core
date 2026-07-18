@@ -32,6 +32,7 @@ llm_core-*.tar
 
 # AI assistant config
 **/CLAUDE.md
+/.codex/
 
 # Legacy DevMan config
 /.devman/
