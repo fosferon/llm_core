@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.4.4 — 2026-07-18
+
+### Fixed
+- Agentic tool-calling conversations now serialize correctly for both the
+  OpenAI and Anthropic wire formats.
+  `LlmCore.LLM.Messages.normalize_chat/1` preserves `tool_calls` on assistant
+  messages and guarantees `function.arguments` is a JSON string as Chat
+  Completions requires — including when a caller passes already-wire-shaped
+  calls whose `arguments` is a decoded map. `valid_message?/1` validates the
+  tool-call structure (a pure tool-call turn is accepted even when content is
+  nil/absent) and filters malformed calls instead of crashing.
+- `LlmCore.LLM.Anthropic.build_payload/1` now converts assistant `tool_calls`
+  into Anthropic native `tool_use` content blocks, paired with the following
+  `tool_result`, so multi-turn tool-calling conversations round-trip through
+  the Anthropic API. Previously they were sent in OpenAI shape and rejected —
+  surfacing via OpenRouter as the misleading "This model does not support
+  assistant message prefill" 400, which failed every tool-invoking turn.
+
 ## 0.4.3 — 2026-07-17
 
 ### Fixed
