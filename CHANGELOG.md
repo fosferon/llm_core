@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.0 — 2026-07-19
+
+### Added
+- `LlmCore.Agent.Loop.run/3` accepts a `:terminal_tool` option: a tool name
+  that, when the model calls it, ends the loop **without dispatching** the
+  call. This lets the model nominate a structured result as its final turn
+  (for example, selecting reflect citations). The raw arguments are attached
+  to `response.metadata.terminal_args`, and the full call object to
+  `response.metadata.terminal_tool_call`. Corresponding fields
+  (`terminal_tool`, `terminal_tool_call`, `terminal_args`) are carried on
+  `LlmCore.Agent.Context` for downstream inspection.
+
 ## 0.4.4 — 2026-07-18
 
 ### Fixed

@@ -68,6 +68,7 @@ final_response.content
 | `:tools` | **Yes** | — | List of `LlmToolkit.Tool.t()` definitions |
 | `:resolve_tool` | **Yes** | — | `fn(Call.t()) -> {:ok, String.t()} \| {:error, String.t()}` |
 | `:resolver_module` | No | `nil` | Module implementing `ToolResolver` behaviour for dispatch recipes |
+| `:terminal_tool` | No | `nil` | Tool name that stops the loop when called. The call is **not** dispatched — its raw arguments land on `response.metadata.terminal_args` and the full call on `response.metadata.terminal_tool_call`. Useful for letting the model select a structured result (e.g. citations) as its final turn. |
 | `:max_iterations` | No | `10` | Hard iteration ceiling |
 | `:on_iteration` | No | `nil` | Callback `fn(Context.t()) -> :ok` invoked after each iteration |
 | `:pipeline_opts` | No | `[sync: true]` | Options forwarded to the ALF pipeline |
