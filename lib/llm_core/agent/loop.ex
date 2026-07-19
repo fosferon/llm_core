@@ -48,6 +48,7 @@ defmodule LlmCore.Agent.Loop do
           | {:on_iteration, (Context.t() -> :ok) | nil}
           | {:pipeline_opts, keyword()}
           | {:llm_opts, keyword()}
+          | {:terminal_tool, String.t() | nil}
         ]
 
   @default_max_iterations 10
@@ -81,6 +82,10 @@ defmodule LlmCore.Agent.Loop do
         after each iteration
       * `:pipeline_opts` — options forwarded to `Pipeline.Iteration.ensure_started/1`
       * `:llm_opts` — extra options forwarded to `llm_send_fn`
+      * `:terminal_tool` — optional tool name that stops the loop when called.
+        The tool is not dispatched; its raw arguments are attached to
+        `response.metadata.terminal_args`, with the call under
+        `response.metadata.terminal_tool_call`.
 
   ## Returns
 
@@ -98,6 +103,7 @@ defmodule LlmCore.Agent.Loop do
     tools = Keyword.fetch!(opts, :tools)
     resolve_tool = Keyword.fetch!(opts, :resolve_tool)
     resolver_module = Keyword.get(opts, :resolver_module)
+    terminal_tool = Keyword.get(opts, :terminal_tool)
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     on_iteration = Keyword.get(opts, :on_iteration)
     pipeline_opts = Keyword.get(opts, :pipeline_opts, sync: true)
@@ -110,6 +116,7 @@ defmodule LlmCore.Agent.Loop do
       tools: tools,
       resolve_tool: resolve_tool,
       resolver_module: resolver_module,
+      terminal_tool: terminal_tool,
       max_iterations: max_iterations,
       on_iteration: on_iteration,
       total_tool_calls: 0,
@@ -175,6 +182,7 @@ defmodule LlmCore.Agent.Loop do
       tools: state.tools,
       resolve_tool: state.resolve_tool,
       resolver_module: state.resolver_module,
+      terminal_tool: state.terminal_tool,
       iteration: iteration,
       max_iterations: state.max_iterations
     }
@@ -193,7 +201,9 @@ defmodule LlmCore.Agent.Loop do
           | {:error, term()}
   defp handle_pipeline_result(%Context{decision: {:done, final_response}} = result_ctx, state) do
     maybe_notify(state.on_iteration, result_ctx)
-    {:done, final_response, state.messages, state.total_tool_calls}
+
+    {:done, attach_terminal_metadata(final_response, result_ctx), state.messages,
+     state.total_tool_calls}
   end
 
   defp handle_pipeline_result(
@@ -277,6 +287,20 @@ defmodule LlmCore.Agent.Loop do
 
   defp update_error_tracker(_state, fingerprint) do
     {fingerprint, 1}
+  end
+
+  defp attach_terminal_metadata(response, %Context{terminal_tool_call: nil}), do: response
+
+  defp attach_terminal_metadata(response, %Context{} = ctx) do
+    metadata =
+      (response.metadata || %{})
+      |> Map.merge(%{
+        terminal_tool: ctx.terminal_tool,
+        terminal_args: ctx.terminal_args,
+        terminal_tool_call: ctx.terminal_tool_call
+      })
+
+    %{response | metadata: metadata}
   end
 
   # -- Helpers ----------------------------------------------------------------

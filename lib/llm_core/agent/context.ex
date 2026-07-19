@@ -19,12 +19,15 @@ defmodule LlmCore.Agent.Context do
     * `resolver_module` — Optional module implementing `ToolResolver` behaviour.
       When set, `DispatchTools` checks for dispatch recipes via
       `resolver_module.dispatch_recipe/1`.
+    * `terminal_tool` — Optional tool name that terminates the loop when called.
     * `iteration` — Current iteration count (0-based)
     * `max_iterations` — Hard iteration limit
 
   ### Intermediate — populated by pipeline stages
 
     * `tool_calls` — Parsed tool call requests from the response
+    * `terminal_tool_call` — Matching terminal tool call when configured
+    * `terminal_args` — Raw arguments from the terminal tool call
     * `tool_results` — Results after tool execution
     * `result_messages` — Formatted messages for the next LLM turn
     * `validation_errors` — Errors from call validation
@@ -55,9 +58,12 @@ defmodule LlmCore.Agent.Context do
           response: Response.t() | nil,
           resolve_tool: (Call.t() -> {:ok, String.t()} | {:error, String.t()}) | nil,
           resolver_module: module() | nil,
+          terminal_tool: String.t() | nil,
           iteration: non_neg_integer(),
           max_iterations: pos_integer(),
           tool_calls: [Call.t()],
+          terminal_tool_call: Call.t() | nil,
+          terminal_args: map() | nil,
           tool_results: [Result.t()],
           result_messages: [map()],
           validation_errors: [term()],
@@ -72,6 +78,7 @@ defmodule LlmCore.Agent.Context do
     :response,
     :resolve_tool,
     :resolver_module,
+    :terminal_tool,
     messages: [],
     tools: [],
     iteration: 0,
@@ -79,6 +86,8 @@ defmodule LlmCore.Agent.Context do
 
     # Intermediate — populated by stages
     tool_calls: [],
+    terminal_tool_call: nil,
+    terminal_args: nil,
     tool_results: [],
     result_messages: [],
     validation_errors: [],

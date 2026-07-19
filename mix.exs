@@ -1,7 +1,7 @@
 defmodule LlmCore.MixProject do
   use Mix.Project
 
-  @version "0.4.4"
+  @version "0.5.0"
   @source_url "https://github.com/fosferon/llm_core"
 
   def project do
