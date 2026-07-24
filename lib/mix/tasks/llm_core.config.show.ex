@@ -19,6 +19,7 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
   use Mix.Task
 
   alias LlmCore.Config.{Loader, Store}
+  alias LlmCore.Memory.Config, as: MemoryConfig
   alias LlmCore.Memory.Hindsight.Config, as: HindsightConfig
   alias LlmCore.Provider.Registry
   alias LlmCore.Router
@@ -107,8 +108,7 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
   end
 
   defp fetch_section(:memory, _opts) do
-    config = HindsightConfig.effective_config()
-    Map.from_struct(config)
+    memory_config()
   end
 
   defp fetch_section(:telemetry, _opts) do
@@ -130,7 +130,7 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
       providers: Registry.all() |> map_size(),
       available_providers: Registry.available() |> length(),
       routing_loaded?: match?({:ok, _}, Store.get_routing()),
-      memory: Map.from_struct(HindsightConfig.effective_config())
+      memory: memory_config()
     }
   end
 
@@ -155,6 +155,7 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
   defp print_section(:summary, payload) do
     Mix.shell().info("Providers: #{payload.providers} (#{payload.available_providers} available)")
     Mix.shell().info("Routing loaded?: #{payload.routing_loaded?}")
+    Mix.shell().info("Memory backend: #{payload.memory.backend}")
     Mix.shell().info("Default bank: #{payload.memory.default_bank_id || "(none)"}")
   end
 
@@ -164,5 +165,11 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
 
   defp match_provider?(definition, term) do
     Enum.any?(definition.aliases, &(&1 == term)) || definition.id == term
+  end
+
+  defp memory_config do
+    HindsightConfig.effective_config()
+    |> Map.from_struct()
+    |> Map.put(:backend, MemoryConfig.backend())
   end
 end

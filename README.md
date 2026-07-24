@@ -1,8 +1,8 @@
 # LlmCore
 
-> Provider-agnostic LLM orchestration for Elixir. Route to any model, run agentic loops, extract structured output, and connect to [Hindsight](https://github.com/vectorize-io/hindsight) semantic memory — all through composable ALF pipelines with hot-reload TOML configuration.
+> Provider-agnostic LLM orchestration for Elixir. Route to any model, run agentic loops, extract structured output, and connect to semantic memory, all through composable ALF pipelines with hot-reload TOML configuration.
 
-LlmCore is the shared LLM substrate that powers the [Fosferon](https://github.com/fosferon) ecosystem. It handles the messy parts of working with LLMs — provider routing, CLI wrapping, structured extraction, tool-calling loops, and [Hindsight](https://github.com/vectorize-io/hindsight) semantic memory integration — so your application code stays clean.
+LlmCore is the shared LLM substrate that powers the [Fosferon](https://github.com/fosferon) ecosystem. It handles the messy parts of working with LLMs — provider routing, CLI wrapping, structured extraction, tool-calling loops, and pluggable semantic memory integration — so your application code stays clean.
 
 ## Why LlmCore?
 
@@ -16,7 +16,7 @@ LlmCore is the shared LLM substrate that powers the [Fosferon](https://github.co
 
 - **Structured output without the weight.** JSON-mode extraction and schema validation built in. No Instructor dependency. Custom validators via functions.
 
-- **[Hindsight](https://github.com/vectorize-io/hindsight) semantic memory client.** Resilient integration with caching, circuit breaker, retry with backoff, and write buffering. Store once, recall by meaning.
+- **Pluggable semantic memory.** Resilient Hindsight and Foresight integrations with caching, circuit breaker, retry with backoff, and write buffering. Store once, recall by meaning.
 
 - **Observable by default.** Every operation emits `:telemetry` events. Pipeline spans, provider dispatch, router decisions, memory operations — all instrumented.
 
@@ -97,9 +97,12 @@ end
   )
 ```
 
-### Semantic memory (via [Hindsight](https://github.com/vectorize-io/hindsight))
+### Semantic memory
 
-LlmCore ships a resilient client for [Hindsight](https://github.com/vectorize-io/hindsight), a standalone semantic memory server. The client handles caching, circuit breaking, retry with backoff, and write buffering so your application code doesn't have to.
+LlmCore supports [Hindsight](https://github.com/vectorize-io/hindsight) and
+Foresight through one API. Hindsight REST remains the default. The HTTP
+backends share caching, circuit breaking, retry with backoff, and write
+buffering.
 
 ```elixir
 # Store a fact (async, buffered)
@@ -111,6 +114,21 @@ LlmCore ships a resilient client for [Hindsight](https://github.com/vectorize-io
 # Synthesize an insight
 {:ok, insight} = LlmCore.reflect("What patterns are most effective?", bank_id: "my-bank")
 ```
+
+Select a backend in `llm_core.toml`:
+
+```toml
+[memory]
+backend = "foresight_http" # hindsight_rest | foresight_http | foresight_inprocess
+
+[memory.foresight_http]
+url = "http://localhost:4012"
+default_bank_id = "my-bank"
+```
+
+For `foresight_inprocess`, the consuming application must depend on Foresight
+and start `Foresight.Supervisor`. LlmCore resolves the optional integration at
+runtime, avoiding a circular package dependency.
 
 ### Query available providers
 

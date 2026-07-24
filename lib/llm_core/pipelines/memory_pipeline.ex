@@ -12,15 +12,15 @@ end
 
 defmodule LlmCore.Pipelines.MemoryPipeline do
   @moduledoc """
-  ALF pipeline orchestrating all Hindsight memory operations (retain, recall,
-  reflect). It centralizes caching, circuit breaker gating, retries, and async
-  buffering to match the architecture requirements of llm_core.
+  ALF pipeline orchestrating REST memory operations (retain, recall, reflect).
+  It centralizes caching, circuit breaker gating, retries, and async buffering.
   """
 
   use ALF.DSL
 
   alias ALF.Manager
-  alias LlmCore.Memory.Hindsight
+  alias LlmCore.Memory.Backend.HindsightREST
+  alias LlmCore.Memory.Config, as: MemoryConfig
   alias LlmCore.Memory.Hindsight.{Cache, CircuitBreaker, Config, WriteBuffer}
   alias LlmCore.Pipelines.MemoryPipeline.Context
   alias LlmCore.Telemetry
@@ -72,8 +72,8 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
   def normalize_request(%Context{operation: :retain_async, payload: payload} = ctx, _opts) do
     opts = Map.get(payload, :opts, [])
     metadata = Map.get(payload, :metadata, %{}) || %{}
-    enriched = Hindsight.enrich_metadata(metadata, opts)
-    bank_id = Hindsight.resolve_bank_id(opts)
+    enriched = HindsightREST.enrich_metadata(metadata, opts)
+    bank_id = HindsightREST.resolve_bank_id(opts)
 
     updated_payload =
       payload
@@ -87,14 +87,14 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   def normalize_request(%Context{operation: :recall, payload: payload} = ctx, _opts) do
     opts = Map.get(payload, :opts, [])
-    cache_key = Cache.recall_key(payload.query, opts)
+    cache_key = Cache.recall_key(payload.query, with_namespace(opts, ctx))
     bypass = Keyword.get(opts, :bypass_cache, false)
     %{ctx | cache_key: cache_key, bypass_cache: bypass}
   end
 
   def normalize_request(%Context{operation: :reflect, payload: payload} = ctx, _opts) do
     opts = Map.get(payload, :opts, [])
-    cache_key = Cache.reflect_key(payload.question, opts)
+    cache_key = Cache.reflect_key(payload.question, with_namespace(opts, ctx))
     %{ctx | cache_key: cache_key, bypass_cache: Keyword.get(opts, :bypass_cache, false)}
   end
 
@@ -160,7 +160,7 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
         %{ctx | result: {:ok, value}}
 
       {:stale, value} ->
-        refresh_recall_async(ctx.url, ctx.payload.query, ctx.payload.opts, key)
+        refresh_recall_async(ctx.url, ctx.payload.query, ctx.payload.opts, key, elem(key, 1))
         %{ctx | result: {:ok, value}}
 
       :miss ->
@@ -175,7 +175,7 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
         %{ctx | result: {:ok, value}}
 
       {:stale, value} ->
-        refresh_reflect_async(ctx.url, ctx.payload.question, ctx.payload.opts, key)
+        refresh_reflect_async(ctx.url, ctx.payload.question, ctx.payload.opts, key, elem(key, 1))
         %{ctx | result: {:ok, value}}
 
       :miss ->
@@ -194,7 +194,7 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
       do: ctx
 
   def circuit_gate(%Context{} = ctx, _opts) do
-    case CircuitBreaker.allow?() do
+    case CircuitBreaker.allow?(request_namespace(ctx)) do
       :ok -> ctx
       {:error, :circuit_open} -> %{ctx | result: {:error, :circuit_open}}
     end
@@ -206,10 +206,19 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   def execute_operation(%Context{operation: :retain_async, payload: payload} = ctx, _opts) do
     opts = Map.get(payload, :opts, [])
-    api_key = Keyword.get(opts, :api_key)
 
-    buffer_opts = [bank_id: Map.get(payload, :bank_id)]
-    buffer_opts = if api_key, do: [{:api_key, api_key} | buffer_opts], else: buffer_opts
+    api_key =
+      case Keyword.get(opts, :api_key) do
+        value when value in [nil, ""] -> System.get_env(ctx.config.api_key_env)
+        value -> value
+      end
+
+    buffer_opts = [
+      bank_id: Map.get(payload, :bank_id),
+      url: ctx.url,
+      api_key: api_key,
+      api_key_resolved: true
+    ]
 
     WriteBuffer.buffer(payload.content, payload.metadata, buffer_opts)
     %{ctx | result: :ok}
@@ -219,20 +228,20 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
         %Context{operation: :retain_sync, url: url, payload: payload} = ctx,
         _opts
       ) do
-    result = Hindsight.do_retain(url, payload.content, payload.metadata, payload.opts)
-    Hindsight.report_result(result)
+    result = HindsightREST.do_retain(url, payload.content, payload.metadata, payload.opts)
+    HindsightREST.report_result(result, request_namespace(ctx))
     %{ctx | result: result}
   end
 
   def execute_operation(%Context{operation: :recall, url: url, payload: payload} = ctx, _opts) do
-    result = Hindsight.do_recall(url, payload.query, payload.opts)
-    Hindsight.report_result(result)
+    result = HindsightREST.do_recall(url, payload.query, payload.opts)
+    HindsightREST.report_result(result, request_namespace(ctx))
     %{ctx | result: result}
   end
 
   def execute_operation(%Context{operation: :reflect, url: url, payload: payload} = ctx, _opts) do
-    result = Hindsight.do_reflect(url, payload.question, payload.opts)
-    Hindsight.report_result(result)
+    result = HindsightREST.do_reflect(url, payload.question, payload.opts)
+    HindsightREST.report_result(result, request_namespace(ctx))
     %{ctx | result: result}
   end
 
@@ -267,6 +276,16 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
   # -- Helpers --------------------------------------------------------------
 
+  defp with_namespace(opts, ctx) do
+    Keyword.put(opts, :memory_namespace, request_namespace(ctx))
+  end
+
+  defp request_namespace(ctx) do
+    opts = Map.get(ctx.payload, :opts, [])
+    bank_id = opts[:target_bank] || opts[:bank_id] || ctx.config.default_bank_id
+    MemoryConfig.namespace(ctx.url, bank_id)
+  end
+
   defp execute(operation, payload) do
     ensure_started()
 
@@ -289,19 +308,19 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
     end
   end
 
-  defp refresh_recall_async(nil, _query, _opts, _cache_key), do: :ok
+  defp refresh_recall_async(nil, _query, _opts, _cache_key, _namespace), do: :ok
 
-  defp refresh_recall_async(url, query, opts, cache_key) do
-    Task.start(fn ->
-      case CircuitBreaker.allow?() do
+  defp refresh_recall_async(url, query, opts, cache_key, namespace) do
+    start_refresh(cache_key, fn ->
+      case CircuitBreaker.allow?(namespace) do
         :ok ->
-          case Hindsight.do_recall(url, query, opts) do
+          case HindsightREST.do_recall(url, query, opts) do
             {:ok, results} = ok ->
-              Hindsight.report_result(ok)
+              HindsightREST.report_result(ok, namespace)
               Cache.put(cache_key, results)
 
             error ->
-              Hindsight.report_result(error)
+              HindsightREST.report_result(error, namespace)
           end
 
         _ ->
@@ -310,25 +329,50 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
     end)
   end
 
-  defp refresh_reflect_async(nil, _question, _opts, _cache_key), do: :ok
+  defp refresh_reflect_async(nil, _question, _opts, _cache_key, _namespace), do: :ok
 
-  defp refresh_reflect_async(url, question, opts, cache_key) do
-    Task.start(fn ->
-      case CircuitBreaker.allow?() do
+  defp refresh_reflect_async(url, question, opts, cache_key, namespace) do
+    start_refresh(cache_key, fn ->
+      case CircuitBreaker.allow?(namespace) do
         :ok ->
-          case Hindsight.do_reflect(url, question, opts) do
+          case HindsightREST.do_reflect(url, question, opts) do
             {:ok, result} = ok ->
-              Hindsight.report_result(ok)
+              HindsightREST.report_result(ok, namespace)
               config = Config.effective_config()
               Cache.put(cache_key, result, ttl_ms: config.cache_reflect_ttl_ms)
 
             error ->
-              Hindsight.report_result(error)
+              HindsightREST.report_result(error, namespace)
           end
 
         _ ->
           :ok
       end
     end)
+  end
+
+  defp start_refresh(cache_key, refresh) do
+    if Cache.claim_refresh(cache_key) do
+      task = fn ->
+        try do
+          refresh.()
+        after
+          Cache.finish_refresh(cache_key)
+        end
+      end
+
+      case Process.whereis(LlmCore.Memory.TaskSupervisor) do
+        nil ->
+          Cache.finish_refresh(cache_key)
+
+        _pid ->
+          case Task.Supervisor.start_child(LlmCore.Memory.TaskSupervisor, task) do
+            {:ok, _pid} -> :ok
+            {:error, _reason} -> Cache.finish_refresh(cache_key)
+          end
+      end
+    end
+
+    :ok
   end
 end

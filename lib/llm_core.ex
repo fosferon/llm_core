@@ -3,7 +3,7 @@ defmodule LlmCore do
   Public facade for LlmCore capabilities.
 
   This is the primary entry point for most LlmCore usage. It delegates to
-  the routing pipeline, inference pipeline, and Hindsight memory client.
+  the routing pipeline, inference pipeline, and configured memory backend.
 
   ## Sending Prompts
 
@@ -39,12 +39,12 @@ defmodule LlmCore do
       # Force reload from config
       :ok = LlmCore.reload_routing()
 
-      # Check Hindsight availability
+      # Check memory backend availability
       LlmCore.hindsight_available?()
   """
 
   alias LlmCore.Router
-  alias LlmCore.Memory.Hindsight
+  alias LlmCore.Memory
 
   @doc """
   Resolves a task type to a configured agent.
@@ -79,32 +79,32 @@ defmodule LlmCore do
   defdelegate reload_routing(), to: Router, as: :sync
 
   @doc """
-  Stores content in Hindsight for semantic indexing (async, buffered).
+  Stores content for semantic indexing.
   """
   @spec retain(String.t(), map()) :: :ok
-  defdelegate retain(content, metadata \\ %{}), to: Hindsight
+  defdelegate retain(content, metadata \\ %{}), to: Memory
 
   @doc """
   Stores content synchronously, bypassing the write buffer.
   """
   @spec retain_sync(String.t(), map()) :: {:ok, map()} | {:error, term()}
-  defdelegate retain_sync(content, metadata \\ %{}), to: Hindsight
+  defdelegate retain_sync(content, metadata \\ %{}), to: Memory
 
   @doc """
   Semantic search for similar content with caching.
   """
   @spec recall(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
-  defdelegate recall(query, opts \\ []), to: Hindsight
+  defdelegate recall(query, opts \\ []), to: Memory
 
   @doc """
   Natural language reflection/synthesis over a bank's memories.
   """
   @spec reflect(String.t() | atom(), keyword()) :: {:ok, term()} | {:error, term()}
-  defdelegate reflect(query, opts \\ []), to: Hindsight
+  defdelegate reflect(query, opts \\ []), to: Memory
 
   @doc """
-  Checks if Hindsight API is available and enabled.
+  Checks if the configured memory backend is available.
   """
   @spec hindsight_available?() :: boolean()
-  defdelegate hindsight_available?(), to: Hindsight, as: :available?
+  defdelegate hindsight_available?(), to: Memory, as: :available?
 end

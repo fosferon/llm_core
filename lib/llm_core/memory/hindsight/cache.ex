@@ -18,6 +18,7 @@ defmodule LlmCore.Memory.Hindsight.Cache do
   use GenServer
   require Logger
 
+  alias LlmCore.Memory.Config, as: MemoryConfig
   alias LlmCore.Memory.Hindsight.Config
 
   @ets_table :llm_core_hindsight_cache
@@ -72,6 +73,18 @@ defmodule LlmCore.Memory.Hindsight.Cache do
     GenServer.cast(__MODULE__, {:put, key, value, opts})
   end
 
+  @doc false
+  @spec claim_refresh(term()) :: boolean()
+  def claim_refresh(key) do
+    GenServer.call(__MODULE__, {:claim_refresh, key})
+  end
+
+  @doc false
+  @spec finish_refresh(term()) :: :ok
+  def finish_refresh(key) do
+    GenServer.cast(__MODULE__, {:finish_refresh, key})
+  end
+
   @doc """
   Invalidates a specific cache entry.
   """
@@ -110,8 +123,14 @@ defmodule LlmCore.Memory.Hindsight.Cache do
   @spec recall_key(String.t(), keyword()) :: term()
   def recall_key(query, opts) do
     project_id = Keyword.get(opts, :project_id)
-    opts_hash = :erlang.phash2(Keyword.delete(opts, :bypass_cache))
-    {:recall, :erlang.phash2(query), opts_hash, project_id}
+    namespace = Keyword.get(opts, :memory_namespace, fallback_namespace(opts))
+
+    opts_hash =
+      opts
+      |> Keyword.drop([:bypass_cache, :memory_namespace])
+      |> :erlang.phash2()
+
+    {:recall, namespace, :erlang.phash2(query), opts_hash, project_id}
   end
 
   @doc """
@@ -120,7 +139,9 @@ defmodule LlmCore.Memory.Hindsight.Cache do
   @spec reflect_key(String.t() | atom(), keyword()) :: term()
   def reflect_key(question, opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
-    {:reflect, :erlang.phash2(question), :erlang.phash2(opts), project_id}
+    namespace = Keyword.get(opts, :memory_namespace, fallback_namespace(opts))
+    opts_hash = opts |> Keyword.delete(:memory_namespace) |> :erlang.phash2()
+    {:reflect, namespace, :erlang.phash2(question), opts_hash, project_id}
   end
 
   # Server callbacks
@@ -133,7 +154,7 @@ defmodule LlmCore.Memory.Hindsight.Cache do
     # Schedule periodic sweep
     schedule_sweep()
 
-    {:ok, %{hits: 0, misses: 0}}
+    {:ok, %{hits: 0, misses: 0, refreshing: MapSet.new()}}
   end
 
   @impl true
@@ -205,6 +226,15 @@ defmodule LlmCore.Memory.Hindsight.Cache do
   end
 
   @impl true
+  def handle_call({:claim_refresh, key}, _from, state) do
+    if MapSet.member?(state.refreshing, key) do
+      {:reply, false, state}
+    else
+      {:reply, true, %{state | refreshing: MapSet.put(state.refreshing, key)}}
+    end
+  end
+
+  @impl true
   def handle_cast({:put, key, value, opts}, state) do
     config = Config.effective_config()
     default_ttl = config.cache_ttl_ms
@@ -231,6 +261,11 @@ defmodule LlmCore.Memory.Hindsight.Cache do
   end
 
   @impl true
+  def handle_cast({:finish_refresh, key}, state) do
+    {:noreply, %{state | refreshing: MapSet.delete(state.refreshing, key)}}
+  end
+
+  @impl true
   def handle_cast({:invalidate, key}, state) do
     :ets.delete(@ets_table, key)
     {:noreply, state}
@@ -252,7 +287,7 @@ defmodule LlmCore.Memory.Hindsight.Cache do
   @impl true
   def handle_cast(:clear, state) do
     :ets.delete_all_objects(@ets_table)
-    {:noreply, %{state | hits: 0, misses: 0}}
+    {:noreply, %{state | hits: 0, misses: 0, refreshing: MapSet.new()}}
   end
 
   @impl true
@@ -263,6 +298,11 @@ defmodule LlmCore.Memory.Hindsight.Cache do
   end
 
   # Private helpers
+
+  defp fallback_namespace(opts) do
+    bank_id = opts[:target_bank] || opts[:bank_id] || Config.effective_bank_id()
+    MemoryConfig.namespace(Config.effective_url(), bank_id)
+  end
 
   defp schedule_sweep do
     Process.send_after(self(), :sweep, @sweep_interval_ms)

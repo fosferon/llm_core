@@ -12,13 +12,18 @@ defmodule LlmCore.Application do
         LlmCore.Router
       ]
       |> maybe_add_watcher()
-      |> maybe_add_hindsight()
 
     case Supervisor.start_link(children, strategy: :one_for_one, name: LlmCore.Supervisor) do
-      {:ok, _pid} = ok ->
-        _ = LlmCore.Config.Loader.reload_providers()
-        _ = LlmCore.Config.Loader.reload_routing()
-        ok
+      {:ok, supervisor} = ok ->
+        with {:ok, _providers} <- LlmCore.Config.Loader.reload_providers(),
+             {:ok, _routing} <- LlmCore.Config.Loader.reload_routing(),
+             :ok <- maybe_start_memory(supervisor) do
+          ok
+        else
+          {:error, reason} ->
+            Supervisor.stop(supervisor)
+            {:error, reason}
+        end
 
       other ->
         other
@@ -34,11 +39,22 @@ defmodule LlmCore.Application do
     end
   end
 
-  defp maybe_add_hindsight(children) do
-    if Application.get_env(:llm_core, :enable_hindsight, true) do
-      children ++ [LlmCore.Memory.Hindsight.Supervisor]
+  defp maybe_start_memory(supervisor) do
+    enabled =
+      Application.get_env(
+        :llm_core,
+        :enable_memory,
+        Application.get_env(:llm_core, :enable_hindsight, true)
+      )
+
+    if enabled do
+      case Supervisor.start_child(supervisor, LlmCore.Memory.Hindsight.Supervisor) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
     else
-      children
+      :ok
     end
   end
 end

@@ -1,7 +1,7 @@
 defmodule LlmCore.Pipelines.MemoryPipelineTest do
   use ExUnit.Case, async: false
 
-  alias LlmCore.Memory.Hindsight
+  alias LlmCore.Memory
   alias LlmCore.Memory.Hindsight.{Cache, Config, WriteBuffer}
 
   setup do
@@ -33,7 +33,7 @@ defmodule LlmCore.Pipelines.MemoryPipelineTest do
     Config.set_runtime_override(%{enabled: true})
     System.put_env("HINDSIGHT_URL", "http://localhost:9999/mcp")
 
-    assert :ok = Hindsight.retain("hello", %{type: :note})
+    assert :ok = Memory.retain("hello", %{type: :note})
 
     # Allow async cast to enqueue
     Process.sleep(10)
@@ -43,7 +43,7 @@ defmodule LlmCore.Pipelines.MemoryPipelineTest do
   test "retain_async no-ops when Hindsight unavailable" do
     Config.set_runtime_override(%{enabled: false})
 
-    assert :ok = Hindsight.retain("hello", %{})
+    assert :ok = Memory.retain("hello", %{})
     assert WriteBuffer.buffer_size() == 0
   end
 
@@ -54,19 +54,19 @@ defmodule LlmCore.Pipelines.MemoryPipelineTest do
     key = Cache.recall_key("cached-query", [])
     Cache.put(key, [%{"note" => "cached"}], ttl_ms: 60_000)
 
-    assert {:ok, [%{"note" => "cached"}]} = Hindsight.recall("cached-query")
+    assert {:ok, [%{"note" => "cached"}]} = Memory.recall("cached-query")
   end
 
   test "recall degrades gracefully when not configured" do
     Config.set_runtime_override(%{enabled: false})
 
-    assert {:ok, []} = Hindsight.recall("any")
+    assert {:ok, []} = Memory.recall("any")
   end
 
   test "reflect degrades gracefully when not configured" do
     Config.set_runtime_override(%{enabled: false})
 
-    assert {:ok, "Hindsight unavailable"} = Hindsight.reflect("question")
+    assert {:ok, "Hindsight unavailable"} = Memory.reflect("question")
   end
 
   defp ensure_started(module) do

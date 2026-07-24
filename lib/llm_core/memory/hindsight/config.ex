@@ -97,30 +97,13 @@ defmodule LlmCore.Memory.Hindsight.Config do
   """
   @spec effective_url() :: String.t() | nil
   def effective_url do
-    # 1. UI override (ETS)
-    case get_ui_override() do
-      {:ok, url} when is_binary(url) and url != "" -> url
-      _ -> resolve_url_from_config()
-    end
-  end
-
-  defp resolve_url_from_config do
-    # 2. Project config
-    project_url = get_project_url()
-    if project_url, do: project_url, else: resolve_url_fallbacks()
-  end
-
-  defp resolve_url_fallbacks do
-    # 3. Global config
-    global_url = get_global_url()
-
-    # 4. Environment variable
-    env_url = System.get_env("HINDSIGHT_URL")
-
-    cond do
-      global_url && global_url != "" -> global_url
-      env_url && env_url != "" -> env_url
-      true -> get_discovered_url()
+    if legacy_sources?() do
+      case get_ui_override() do
+        {:ok, url} when is_binary(url) and url != "" -> url
+        _ -> effective_config().url || get_discovered_url()
+      end
+    else
+      effective_config().url
     end
   end
 
@@ -131,21 +114,17 @@ defmodule LlmCore.Memory.Hindsight.Config do
   def effective_config do
     base = defaults()
 
-    # Load global config
-    global = load_global_config()
-
-    # Load project config
-    project = load_project_config()
-
-    # Merge: base < global < project
     merged =
-      base
-      |> merge_config(global)
-      |> merge_config(project)
-      |> apply_env_overrides()
-      |> apply_runtime_override()
+      if legacy_sources?() do
+        base
+        |> apply_env_overrides()
+        |> merge_config(load_global_config())
+        |> merge_config(load_project_config())
+      else
+        base
+      end
 
-    struct(__MODULE__, Map.to_list(merged))
+    struct(__MODULE__, Map.to_list(apply_runtime_override(merged)))
   end
 
   @doc """
@@ -275,6 +254,8 @@ defmodule LlmCore.Memory.Hindsight.Config do
 
   # Private helpers
 
+  defp legacy_sources?, do: LlmCore.Memory.Config.backend() == :hindsight_rest
+
   defp ensure_ets_table do
     if :ets.whereis(@ets_table) == :undefined do
       :ets.new(@ets_table, [:named_table, :set, :public])
@@ -288,16 +269,6 @@ defmodule LlmCore.Memory.Hindsight.Config do
       [{:ui_override_url, url}] -> {:ok, url}
       _ -> :not_set
     end
-  end
-
-  defp get_project_url do
-    project_config = load_project_config()
-    project_config[:url]
-  end
-
-  defp get_global_url do
-    global_config = load_global_config()
-    global_config[:url]
   end
 
   defp load_global_config do

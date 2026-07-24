@@ -10,9 +10,8 @@ defmodule LlmCore.Memory.Hindsight.Supervisor do
   """
 
   use Supervisor
-  require Logger
-
-  alias LlmCore.Memory.Hindsight.{Cache, CircuitBreaker, Config, Discovery, WriteBuffer}
+  alias LlmCore.Memory
+  alias LlmCore.Memory.Hindsight.{Cache, CircuitBreaker, Config, Monitor, WriteBuffer}
 
   @doc """
   Starts the Hindsight supervisor.
@@ -24,16 +23,22 @@ defmodule LlmCore.Memory.Hindsight.Supervisor do
 
   @impl true
   def init(_opts) do
-    config = Config.effective_config()
-
     children = [
       Cache,
       WriteBuffer,
       CircuitBreaker,
-      {Task, fn -> startup_sequence(config) end}
+      {Task.Supervisor, name: LlmCore.Memory.TaskSupervisor},
+      Monitor
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  @doc false
+  @spec refresh() :: :ok
+  def refresh do
+    if Process.whereis(Monitor), do: Monitor.refresh()
+    :ok
   end
 
   @doc """
@@ -61,68 +66,9 @@ defmodule LlmCore.Memory.Hindsight.Supervisor do
   """
   @spec connected?() :: boolean()
   def connected? do
-    LlmCore.Memory.Hindsight.available?()
+    Memory.available?()
   rescue
     _ -> false
-  end
-
-  # Private helpers
-
-  defp startup_sequence(config) do
-    Logger.info("Starting Hindsight integration...")
-
-    # 1. Run auto-discovery if no URL configured
-    if is_nil(Config.effective_url()) do
-      Discovery.discover()
-    end
-
-    # 2. Run prefetch if enabled
-    if config.prefetch_on_startup do
-      prefetch_common_queries()
-    end
-
-    # 3. Start background health monitoring
-    spawn_link(fn -> health_monitor_loop() end)
-
-    Logger.info("Hindsight integration started")
-  end
-
-  defp prefetch_common_queries do
-    Task.start(fn ->
-      Logger.debug("Prefetching common Hindsight queries...")
-
-      # Prefetch recent patterns
-      LlmCore.Memory.Hindsight.recall("recent patterns", limit: 5)
-
-      # Prefetch workflow insights
-      LlmCore.Memory.Hindsight.reflect(:workflow_effectiveness, workflow: "default")
-    end)
-  end
-
-  defp health_monitor_loop do
-    # Check health every 60 seconds
-    Process.sleep(60_000)
-
-    case LlmCore.Memory.Hindsight.health_check() do
-      {:ok, _} -> notify_health(true)
-      {:error, _reason} -> notify_health(false)
-    end
-
-    health_monitor_loop()
-  rescue
-    _ -> health_monitor_loop()
-  end
-
-  defp notify_health(status) do
-    :telemetry.execute(
-      [
-        :llm_core,
-        :hindsight,
-        :health
-      ],
-      %{tests: 1},
-      %{connected: status}
-    )
   end
 
   defp get_circuit_state do

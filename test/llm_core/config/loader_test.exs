@@ -3,6 +3,7 @@ defmodule LlmCore.Config.LoaderTest do
 
   alias LlmCore.Config.Loader
   alias LlmCore.Config.Store
+  alias LlmCore.Memory.Config, as: MemoryConfig
   alias LlmCore.Memory.Hindsight.Config, as: HindsightConfig
   alias LlmCore.Router.RoutingTable
   alias LlmCore.Provider.Registry
@@ -16,6 +17,7 @@ defmodule LlmCore.Config.LoaderTest do
     TelemetrySettings.apply(%{})
 
     on_exit(fn ->
+      MemoryConfig.clear_runtime_override()
       HindsightConfig.clear_runtime_override()
     end)
 
@@ -210,6 +212,69 @@ defmodule LlmCore.Config.LoaderTest do
     config = HindsightConfig.effective_config()
     assert config.default_bank_id == "second-bank"
     assert config.cache_ttl_ms == 9000
+  end
+
+  test "memory backend selection applies per-backend HTTP options" do
+    config_path = temp_path("llm_core-memory-backend.toml")
+
+    File.write!(
+      config_path,
+      [
+        "[memory]",
+        "backend = \"foresight_http\"",
+        "",
+        "[memory.foresight_http]",
+        "url = \"http://foresight.test:4100\"",
+        "default_bank_id = \"foresight-bank\""
+      ]
+      |> Enum.join("\n")
+    )
+
+    on_exit(fn -> File.rm_rf(config_path) end)
+
+    assert {:ok, _} = Loader.reload_providers(path: config_path)
+    assert MemoryConfig.backend() == :foresight_http
+    assert HindsightConfig.effective_url() == "http://foresight.test:4100"
+    assert HindsightConfig.effective_bank_id() == "foresight-bank"
+  end
+
+  test "Foresight HTTP uses its default port when URL is omitted" do
+    config_path = temp_path("llm_core-memory-default-url.toml")
+
+    File.write!(
+      config_path,
+      [
+        "[memory]",
+        "backend = \"foresight_http\"",
+        "",
+        "[memory.foresight_http]",
+        "default_bank_id = \"default\""
+      ]
+      |> Enum.join("\n")
+    )
+
+    on_exit(fn -> File.rm_rf(config_path) end)
+
+    assert {:ok, _} = Loader.reload_providers(path: config_path)
+    assert HindsightConfig.effective_url() == "http://localhost:4012"
+  end
+
+  test "invalid memory backend is rejected instead of falling back" do
+    config_path = temp_path("llm_core-memory-invalid-backend.toml")
+
+    File.write!(
+      config_path,
+      [
+        "[memory]",
+        "backend = \"foresight_htp\""
+      ]
+      |> Enum.join("\n")
+    )
+
+    on_exit(fn -> File.rm_rf(config_path) end)
+
+    assert {:error, {:invalid_memory_backend, "foresight_htp"}} =
+             Loader.reload_providers(path: config_path)
   end
 
   test "telemetry config persists into settings" do

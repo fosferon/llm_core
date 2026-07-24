@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.6.0 — 2026-07-24
+
+### Added
+- `LlmCore.Memory.Backend` and the backend-neutral `LlmCore.Memory` facade.
+- Configurable `hindsight_rest`, `foresight_http`, and optional
+  `foresight_inprocess` memory backends. The two HTTP backends share the
+  existing cache, circuit breaker, retry, and write-buffer implementation.
+
+### Changed
+- `LlmCore.Memory.Hindsight` is deprecated in favor of `LlmCore.Memory` and
+  remains as a compatibility facade for one release.
+- The default memory backend remains Hindsight REST, so existing consumers
+  require no configuration or code changes.
+
 ## 0.5.0 — 2026-07-19
 
 ### Added

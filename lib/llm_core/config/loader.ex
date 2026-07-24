@@ -30,7 +30,9 @@ defmodule LlmCore.Config.Loader do
 
   alias LlmCore.Agent.Registry
   alias LlmCore.Config.Store
+  alias LlmCore.Memory.Config, as: MemoryConfig
   alias LlmCore.Memory.Hindsight.Config, as: HindsightConfig
+  alias LlmCore.Memory.Hindsight.Supervisor, as: MemorySupervisor
   alias LlmCore.Paths
   alias LlmCore.LLM.CLIProvider
   alias LlmCore.Provider.Definition
@@ -96,7 +98,8 @@ defmodule LlmCore.Config.Loader do
           {:ok, %{optional(String.t()) => Definition.t()}} | {:error, term()}
   def reload_providers(opts \\ []) do
     with {:ok, config} <- load_config(opts),
-         {:ok, providers} <- build_providers(config) do
+         {:ok, providers} <- build_providers(config),
+         :ok <- apply_memory_config(config) do
       :ok = Store.put(:config, :raw, config)
       :ok = Store.put(:config, :providers, providers)
       store_cli_configs(providers)
@@ -194,7 +197,6 @@ defmodule LlmCore.Config.Loader do
   defp apply_config_sections(config) do
     config
     |> apply_routing_config()
-    |> apply_memory_config()
     |> apply_telemetry_config()
   end
 
@@ -876,14 +878,25 @@ defmodule LlmCore.Config.Loader do
   defp normalize_route_value(value), do: value
 
   defp apply_memory_config(config) do
-    case get_in(config, ["memory", "hindsight"]) do
-      memory when is_map(memory) and memory != %{} ->
-        :ok = HindsightConfig.set_runtime_override(memory)
-        config
+    memory =
+      case Map.get(config, "memory", %{}) do
+        value when is_map(value) -> value
+        _value -> %{}
+      end
 
-      _ ->
-        :ok = HindsightConfig.clear_runtime_override()
-        config
+    with :ok <- MemoryConfig.set_runtime_override(memory) do
+      backend_options =
+        case MemoryConfig.backend() do
+          backend when backend in [:hindsight_rest, :foresight_http] ->
+            MemoryConfig.backend_options(backend)
+
+          :foresight_inprocess ->
+            %{enabled: false}
+        end
+
+      with :ok <- HindsightConfig.set_runtime_override(backend_options) do
+        MemorySupervisor.refresh()
+      end
     end
   end
 

@@ -13,6 +13,9 @@ alias = "claude"
 mode = "abstracted"
 capabilities = { reasoning = true }
 
+[memory]
+backend = "hindsight_rest"
+
 [memory.hindsight]
 enabled = true
 default_bank_id = "${HINDSIGHT_DEFAULT_BANK}"

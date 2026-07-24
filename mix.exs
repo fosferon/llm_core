@@ -1,7 +1,7 @@
 defmodule LlmCore.MixProject do
   use Mix.Project
 
-  @version "0.5.0"
+  @version "0.6.0"
   @source_url "https://github.com/fosferon/llm_core"
 
   def project do
@@ -74,7 +74,14 @@ defmodule LlmCore.MixProject do
           LlmCore.Agent.Registry
         ],
         "Structured Output": [LlmCore.Structured],
-        Memory: [LlmCore.Memory.Hindsight],
+        Memory: [
+          LlmCore.Memory,
+          LlmCore.Memory.Backend,
+          LlmCore.Memory.Backend.HindsightREST,
+          LlmCore.Memory.Backend.ForesightHTTP,
+          LlmCore.Memory.Backend.ForesightInProcess,
+          LlmCore.Memory.Hindsight
+        ],
         Registries: [
           LlmCore.Provider.Registry,
           LlmCore.Provider.Definition,

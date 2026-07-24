@@ -16,6 +16,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   use GenServer
   require Logger
 
+  alias LlmCore.Memory.Backend.HindsightREST
   alias LlmCore.Memory.Hindsight.Config
 
   @flush_interval_ms 5_000
@@ -24,6 +25,8 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
 
   @type state :: %{
           buffer: [map()],
+          buffer_size: non_neg_integer(),
+          flush_pending: boolean(),
           timer_ref: reference() | nil,
           retry_count: non_neg_integer()
         }
@@ -45,8 +48,14 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   @spec buffer(String.t(), map(), keyword()) :: :ok
   def buffer(content, metadata, opts \\ []) do
     bank_id = Keyword.get(opts, :bank_id)
-    api_key = Keyword.get(opts, :api_key)
-    GenServer.cast(__MODULE__, {:buffer, content, metadata, bank_id, api_key})
+
+    api_key =
+      if Keyword.get(opts, :api_key_resolved, false),
+        do: Keyword.get(opts, :api_key),
+        else: resolve_api_key(Keyword.get(opts, :api_key))
+
+    url = Keyword.get(opts, :url) || Config.effective_url()
+    GenServer.cast(__MODULE__, {:buffer, content, metadata, bank_id, api_key, url})
   end
 
   @doc """
@@ -82,63 +91,75 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     # Schedule periodic flush
     timer_ref = schedule_flush()
 
-    {:ok, %{buffer: buffer, timer_ref: timer_ref, retry_count: 0}}
+    {:ok,
+     %{
+       buffer: buffer,
+       buffer_size: length(buffer),
+       flush_pending: false,
+       timer_ref: timer_ref,
+       retry_count: 0
+     }}
   end
 
   @impl true
-  def handle_cast({:buffer, content, metadata, bank_id, api_key}, state) do
+  def handle_cast({:buffer, content, metadata, bank_id, api_key, url}, state) do
     item = %{
+      id: System.unique_integer([:positive, :monotonic]),
       content: content,
       metadata: metadata,
       timestamp: DateTime.to_iso8601(DateTime.utc_now()),
       project_id: get_project_id(),
       bank_id: bank_id,
-      api_key: api_key
+      api_key: api_key,
+      credential_state: if(api_key in [nil, ""], do: :absent, else: :resolved),
+      url: url
     }
 
     new_buffer = [item | state.buffer]
+    new_size = state.buffer_size + 1
+    flush_pending = state.flush_pending || new_size >= @max_buffer_size
 
-    # Check if we should flush
-    if length(new_buffer) >= @max_buffer_size do
+    if flush_pending && not state.flush_pending do
       send(self(), :flush_now)
     end
 
-    {:noreply, %{state | buffer: new_buffer}}
+    {:noreply,
+     %{
+       state
+       | buffer: new_buffer,
+         buffer_size: new_size,
+         flush_pending: flush_pending
+     }}
   end
 
   @impl true
   def handle_call(:flush, _from, state) do
-    case do_flush(state.buffer) do
-      :ok ->
-        {:reply, :ok, %{state | buffer: [], retry_count: 0}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
+    {reply, state} = flush_state(state, :all)
+    {:reply, reply, state}
   end
 
   @impl true
   def handle_call(:buffer_size, _from, state) do
-    {:reply, length(state.buffer), state}
+    {:reply, state.buffer_size, state}
   end
 
   @impl true
   def handle_call(:clear_buffer, _from, state) do
-    {:reply, :ok, %{state | buffer: []}}
+    {:reply, :ok, %{state | buffer: [], buffer_size: 0, flush_pending: false}}
   end
 
   @impl true
   def handle_info(:flush_timer, state) do
     state =
       if state.buffer != [] do
-        case do_flush(state.buffer) do
-          :ok ->
-            %{state | buffer: [], retry_count: 0}
+        case flush_state(state, :all) do
+          {:ok, state} ->
+            state
 
-          {:error, reason} ->
+          {{:error, reason}, state} ->
             Logger.warning("Hindsight write buffer flush failed: #{inspect(reason)}")
             schedule_retry(state.retry_count)
-            %{state | retry_count: state.retry_count + 1}
+            %{state | retry_count: state.retry_count + 1, flush_pending: true}
         end
       else
         state
@@ -150,13 +171,15 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
 
   @impl true
   def handle_info(:flush_now, state) do
-    case do_flush(state.buffer) do
-      :ok ->
-        {:noreply, %{state | buffer: [], retry_count: 0}}
+    case flush_state(state, @max_buffer_size) do
+      {:ok, state} ->
+        if state.buffer_size >= @max_buffer_size, do: send(self(), :flush_now)
+        {:noreply, %{state | flush_pending: state.buffer_size >= @max_buffer_size}}
 
-      {:error, reason} ->
+      {{:error, reason}, state} ->
         Logger.warning("Hindsight write buffer flush failed: #{inspect(reason)}")
-        {:noreply, state}
+        schedule_retry(state.retry_count)
+        {:noreply, %{state | flush_pending: true, retry_count: state.retry_count + 1}}
     end
   end
 
@@ -196,23 +219,104 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     Process.send_after(self(), :retry_flush, delay)
   end
 
-  defp do_flush([]), do: :ok
+  defp flush_state(state, limit) do
+    items = take_oldest(state.buffer, limit)
+
+    case do_flush(items) do
+      {:ok, sent_ids} ->
+        remaining = reject_sent(state.buffer, sent_ids)
+
+        {:ok,
+         %{
+           state
+           | buffer: remaining,
+             buffer_size: length(remaining),
+             flush_pending: false,
+             retry_count: 0
+         }}
+
+      {:error, reason, sent_ids} ->
+        remaining = reject_sent(state.buffer, sent_ids)
+
+        {{:error, reason},
+         %{
+           state
+           | buffer: remaining,
+             buffer_size: length(remaining)
+         }}
+    end
+  end
+
+  defp do_flush([]), do: {:ok, MapSet.new()}
 
   defp do_flush(buffer) do
-    url = Config.effective_url()
+    fallback_url = Config.effective_url()
 
-    if url do
-      buffer
-      |> Enum.group_by(&{Map.get(&1, :bank_id), Map.get(&1, :api_key)})
-      |> Enum.reduce_while(:ok, fn {{bank_id, api_key}, items}, _acc ->
+    buffer
+    |> Enum.group_by(
+      &{
+        Map.get(&1, :url) || Map.get(&1, "url") || fallback_url,
+        Map.get(&1, :bank_id) || Map.get(&1, "bank_id"),
+        credential(&1)
+      }
+    )
+    |> Enum.sort_by(fn {{url, bank_id, _api_key}, _items} ->
+      {to_string(url), to_string(bank_id)}
+    end)
+    |> Enum.reduce_while({:ok, MapSet.new()}, fn
+      {{nil, _bank_id, _api_key}, items}, {:ok, sent_ids} ->
+        Logger.debug("Memory backend not configured, skipping buffer flush")
+        {:cont, {:ok, MapSet.union(sent_ids, item_ids(items))}}
+
+      {{url, bank_id, {:missing, marker}}, _items}, {:ok, sent_ids} ->
+        {:halt, {:error, {:missing_buffer_credential, marker, url, bank_id}, sent_ids}}
+
+      {{url, bank_id, api_key}, items}, {:ok, sent_ids} ->
         case send_batch(url, bank_id, items, api_key) do
-          :ok -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, reason}}
+          :ok -> {:cont, {:ok, MapSet.union(sent_ids, item_ids(items))}}
+          {:error, reason} -> {:halt, {:error, reason, sent_ids}}
         end
-      end)
-    else
-      Logger.debug("Hindsight not configured, skipping buffer flush")
-      :ok
+    end)
+  end
+
+  defp take_oldest(buffer, :all), do: Enum.reverse(buffer)
+
+  defp take_oldest(buffer, limit) when is_integer(limit) do
+    buffer
+    |> Enum.take(-limit)
+    |> Enum.reverse()
+  end
+
+  defp reject_sent(buffer, sent_ids) do
+    Enum.reject(buffer, &(item_id(&1) in sent_ids))
+  end
+
+  defp item_ids(items), do: MapSet.new(items, &item_id/1)
+
+  defp item_id(item) do
+    Map.get(item, :id) || Map.get(item, "id") ||
+      {:legacy, Map.get(item, :timestamp) || Map.get(item, "timestamp"), :erlang.phash2(item)}
+  end
+
+  defp credential(item) do
+    api_key = fetch_item(item, :api_key)
+
+    case fetch_item(item, :credential_state) do
+      :resolved -> api_key
+      "resolved" -> api_key
+      :absent -> nil
+      "absent" -> nil
+      :redacted -> {:missing, item_id(item)}
+      "redacted" -> {:missing, item_id(item)}
+      nil when api_key in [nil, ""] -> nil
+      nil -> api_key
+    end
+  end
+
+  defp fetch_item(item, key) do
+    case Map.fetch(item, key) do
+      {:ok, value} -> value
+      :error -> Map.get(item, Atom.to_string(key))
     end
   end
 
@@ -235,20 +339,15 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
       end)
 
     body = %{items: retain_items, async: true}
+    path = "/v1/default/banks/#{effective_bank}/memories"
 
-    url = String.trim_trailing(base_url, "/") <> "/v1/default/banks/#{effective_bank}/memories"
-    headers = build_headers(api_key)
-
-    case Req.post(url, json: body, headers: headers, receive_timeout: timeout) do
-      {:ok, %{status: 200}} ->
+    case HindsightREST.rest_post(base_url, path, body, timeout,
+           api_key: api_key,
+           api_key_resolved: true
+         ) do
+      {:ok, _response} ->
         Logger.debug("Hindsight batch retained #{length(items)} items in bank #{effective_bank}")
         :ok
-
-      {:ok, %{status: status}} ->
-        {:error, {:http_error, status}}
-
-      {:error, %Req.TransportError{reason: reason}} ->
-        {:error, {:transport_error, reason}}
 
       {:error, reason} ->
         {:error, reason}
@@ -259,22 +358,10 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   end
 
   @doc false
-  def build_headers(api_key \\ nil) do
-    headers = [{"content-type", "application/json"}]
+  defdelegate build_headers(api_key \\ nil), to: HindsightREST
 
-    key =
-      case api_key do
-        nil -> Config.get_api_key()
-        "" -> Config.get_api_key()
-        k -> k
-      end
-
-    case key do
-      nil -> headers
-      "" -> headers
-      k -> [{"authorization", "Bearer #{k}"} | headers]
-    end
-  end
+  defp resolve_api_key(api_key) when api_key in [nil, ""], do: Config.get_api_key()
+  defp resolve_api_key(api_key), do: api_key
 
   defp get_project_id do
     cwd = File.cwd!()
@@ -291,10 +378,12 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
 
     content =
       buffer
+      |> Enum.map(&redact_credential/1)
       |> Enum.map(&Jason.encode!/1)
       |> Enum.join("\n")
 
     File.write!(path, content)
+    File.chmod!(path, 0o600)
     Logger.info("Persisted #{length(buffer)} items to Hindsight buffer file")
   rescue
     error ->
@@ -322,5 +411,20 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     end
   rescue
     _ -> []
+  end
+
+  defp redact_credential(item) do
+    state =
+      case {fetch_item(item, :credential_state), fetch_item(item, :api_key)} do
+        {value, _api_key} when value in [:resolved, "resolved"] -> :redacted
+        {value, _api_key} when value in [:absent, "absent"] -> :absent
+        {nil, api_key} when api_key in [nil, ""] -> :absent
+        _ -> :redacted
+      end
+
+    item
+    |> Map.delete(:api_key)
+    |> Map.delete("api_key")
+    |> Map.put(:credential_state, state)
   end
 end

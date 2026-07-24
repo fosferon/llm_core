@@ -84,8 +84,10 @@ defmodule LlmCore.Memory.Hindsight.Retry do
       :timeout -> true
       # Server errors (5xx) - retry
       {:http_error, status} when status >= 500 and status < 600 -> true
+      {:http_error, status, _body} when status >= 500 and status < 600 -> true
       # Client errors (4xx) - don't retry
       {:http_error, status} when status >= 400 and status < 500 -> false
+      {:http_error, status, _body} when status >= 400 and status < 500 -> false
       # Circuit open - don't retry (handled by circuit breaker)
       :circuit_open -> false
       # Unknown errors - don't retry

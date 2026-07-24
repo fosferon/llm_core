@@ -18,16 +18,25 @@ defmodule LlmCore.Memory.Hindsight.CircuitBreaker do
   use GenServer
   require Logger
 
+  alias LlmCore.Memory.Config, as: MemoryConfig
   alias LlmCore.Memory.Hindsight.Config
+
+  @max_namespaces 256
 
   @type state_name :: :closed | :open | :half_open
 
-  @type state :: %{
+  @type circuit :: %{
           status: state_name(),
           failure_count: non_neg_integer(),
           last_failure_at: integer() | nil,
-          last_success_at: integer() | nil
+          last_success_at: integer() | nil,
+          last_touched_at: integer(),
+          probe_in_flight: boolean(),
+          failure_threshold: pos_integer(),
+          reset_ms: pos_integer()
         }
+
+  @type state :: %{circuits: %{optional(term()) => circuit()}}
 
   # Client API
 
@@ -46,33 +55,33 @@ defmodule LlmCore.Memory.Hindsight.CircuitBreaker do
   - `:ok` - proceed with request
   - `{:error, :circuit_open}` - circuit is open, use fallback
   """
-  @spec allow?() :: :ok | {:error, :circuit_open}
-  def allow? do
-    GenServer.call(__MODULE__, :allow?)
+  @spec allow?(term()) :: :ok | {:error, :circuit_open}
+  def allow?(namespace \\ fallback_namespace()) do
+    GenServer.call(__MODULE__, {:allow?, namespace})
   end
 
   @doc """
   Reports a successful request.
   """
-  @spec report_success() :: :ok
-  def report_success do
-    GenServer.cast(__MODULE__, :success)
+  @spec report_success(term()) :: :ok
+  def report_success(namespace \\ fallback_namespace()) do
+    GenServer.cast(__MODULE__, {:success, namespace})
   end
 
   @doc """
   Reports a failed request.
   """
-  @spec report_failure(term()) :: :ok
-  def report_failure(reason) do
-    GenServer.cast(__MODULE__, {:failure, reason})
+  @spec report_failure(term(), term()) :: :ok
+  def report_failure(reason, namespace \\ fallback_namespace()) do
+    GenServer.cast(__MODULE__, {:failure, reason, namespace})
   end
 
   @doc """
   Returns the current circuit status.
   """
-  @spec status() :: %{status: state_name(), failure_count: non_neg_integer()}
-  def status do
-    GenServer.call(__MODULE__, :status)
+  @spec status(term()) :: %{status: state_name(), failure_count: non_neg_integer()}
+  def status(namespace \\ fallback_namespace()) do
+    GenServer.call(__MODULE__, {:status, namespace})
   end
 
   @doc """
@@ -87,80 +96,99 @@ defmodule LlmCore.Memory.Hindsight.CircuitBreaker do
 
   @impl true
   def init(_opts) do
-    {:ok,
-     %{
-       status: :closed,
-       failure_count: 0,
-       last_failure_at: nil,
-       last_success_at: nil
-     }}
+    {:ok, %{circuits: %{}}}
   end
 
   @impl true
-  def handle_call(:allow?, _from, state) do
+  def handle_call({:allow?, namespace}, _from, state) do
     config = Config.effective_config()
     now = System.monotonic_time(:millisecond)
+    circuit = get_circuit(state, namespace, config, now)
 
-    case state.status do
-      :closed ->
-        {:reply, :ok, state}
+    {reply, circuit} =
+      case circuit.status do
+        :closed ->
+          {:ok, circuit}
 
-      :open ->
-        # Check if enough time has passed to try half-open
-        if state.last_failure_at &&
-             now - state.last_failure_at >= config.circuit_reset_ms do
-          Logger.info("Hindsight circuit breaker: Open → Half-open")
-          {:reply, :ok, %{state | status: :half_open}}
-        else
-          {:reply, {:error, :circuit_open}, state}
-        end
+        :open ->
+          if circuit.last_failure_at && now - circuit.last_failure_at >= circuit.reset_ms do
+            Logger.info("Hindsight circuit breaker: Open → Half-open")
+            {:ok, %{circuit | status: :half_open, probe_in_flight: true}}
+          else
+            {{:error, :circuit_open}, circuit}
+          end
 
-      :half_open ->
-        # Allow one probe request
-        {:reply, :ok, state}
-    end
-  end
-
-  @impl true
-  def handle_call(:status, _from, state) do
-    {:reply, %{status: state.status, failure_count: state.failure_count}, state}
-  end
-
-  @impl true
-  def handle_cast(:success, state) do
-    now = System.monotonic_time(:millisecond)
-
-    new_state =
-      case state.status do
         :half_open ->
-          Logger.info("Hindsight circuit breaker: Half-open → Closed")
-          %{state | status: :closed, failure_count: 0, last_success_at: now}
-
-        _ ->
-          %{state | failure_count: 0, last_success_at: now}
+          if circuit.probe_in_flight do
+            {{:error, :circuit_open}, circuit}
+          else
+            {:ok, %{circuit | probe_in_flight: true}}
+          end
       end
 
-    {:noreply, new_state}
+    {:reply, reply, put_circuit(state, namespace, touch(circuit, now))}
   end
 
   @impl true
-  def handle_cast({:failure, reason}, state) do
+  def handle_call({:status, namespace}, _from, state) do
     config = Config.effective_config()
     now = System.monotonic_time(:millisecond)
+    circuit = get_circuit(state, namespace, config, now)
+    reply = %{status: circuit.status, failure_count: circuit.failure_count}
+    {:reply, reply, put_circuit(state, namespace, touch(circuit, now))}
+  end
 
-    new_failure_count = state.failure_count + 1
+  @impl true
+  def handle_cast({:success, namespace}, state) do
+    now = System.monotonic_time(:millisecond)
+    config = Config.effective_config()
+    circuit = get_circuit(state, namespace, config, now)
 
-    new_state =
-      case state.status do
+    circuit =
+      case circuit.status do
+        :half_open ->
+          Logger.info("Hindsight circuit breaker: Half-open → Closed")
+
+          %{
+            circuit
+            | status: :closed,
+              failure_count: 0,
+              last_success_at: now,
+              probe_in_flight: false
+          }
+
+        _ ->
+          %{circuit | failure_count: 0, last_success_at: now, probe_in_flight: false}
+      end
+
+    {:noreply, put_circuit(state, namespace, touch(circuit, now))}
+  end
+
+  @impl true
+  def handle_cast({:failure, reason, namespace}, state) do
+    config = Config.effective_config()
+    now = System.monotonic_time(:millisecond)
+    circuit = get_circuit(state, namespace, config, now)
+
+    new_failure_count = circuit.failure_count + 1
+
+    circuit =
+      case circuit.status do
         :closed ->
-          if new_failure_count >= config.circuit_failure_threshold do
+          if new_failure_count >= circuit.failure_threshold do
             Logger.warning(
               "Hindsight circuit breaker: Closed → Open after #{new_failure_count} failures"
             )
 
-            %{state | status: :open, failure_count: new_failure_count, last_failure_at: now}
+            %{
+              circuit
+              | status: :open,
+                failure_count: new_failure_count,
+                last_failure_at: now,
+                probe_in_flight: false
+            }
           else
-            %{state | failure_count: new_failure_count, last_failure_at: now}
+            %{circuit | failure_count: new_failure_count, last_failure_at: now}
           end
 
         :half_open ->
@@ -168,25 +196,70 @@ defmodule LlmCore.Memory.Hindsight.CircuitBreaker do
             "Hindsight circuit breaker: Half-open → Open (probe failed: #{inspect(reason)})"
           )
 
-          %{state | status: :open, failure_count: new_failure_count, last_failure_at: now}
+          %{
+            circuit
+            | status: :open,
+              failure_count: new_failure_count,
+              last_failure_at: now,
+              probe_in_flight: false
+          }
 
         :open ->
-          %{state | failure_count: new_failure_count, last_failure_at: now}
+          %{circuit | failure_count: new_failure_count, last_failure_at: now}
       end
 
-    {:noreply, new_state}
+    {:noreply, put_circuit(state, namespace, touch(circuit, now))}
   end
 
   @impl true
   def handle_cast(:reset, _state) do
-    Logger.info("Hindsight circuit breaker: Manual reset to Closed")
+    {:noreply, %{circuits: %{}}}
+  end
 
-    {:noreply,
-     %{
-       status: :closed,
-       failure_count: 0,
-       last_failure_at: nil,
-       last_success_at: System.monotonic_time(:millisecond)
-     }}
+  defp get_circuit(state, namespace, config, now) do
+    case Map.get(state.circuits, namespace) do
+      nil ->
+        initial_circuit(config, now)
+
+      circuit ->
+        %{
+          circuit
+          | failure_threshold: config.circuit_failure_threshold,
+            reset_ms: config.circuit_reset_ms
+        }
+    end
+  end
+
+  defp initial_circuit(config, now) do
+    %{
+      status: :closed,
+      failure_count: 0,
+      last_failure_at: nil,
+      last_success_at: nil,
+      last_touched_at: now,
+      probe_in_flight: false,
+      failure_threshold: config.circuit_failure_threshold,
+      reset_ms: config.circuit_reset_ms
+    }
+  end
+
+  defp put_circuit(state, namespace, circuit) do
+    circuits =
+      if Map.has_key?(state.circuits, namespace) or map_size(state.circuits) < @max_namespaces do
+        state.circuits
+      else
+        {oldest_namespace, _circuit} =
+          Enum.min_by(state.circuits, fn {_key, value} -> value.last_touched_at end)
+
+        Map.delete(state.circuits, oldest_namespace)
+      end
+
+    %{state | circuits: Map.put(circuits, namespace, circuit)}
+  end
+
+  defp touch(circuit, now), do: %{circuit | last_touched_at: now}
+
+  defp fallback_namespace do
+    MemoryConfig.namespace(Config.effective_url(), Config.effective_bank_id())
   end
 end
