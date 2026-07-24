@@ -13,16 +13,23 @@ defmodule LlmCore.Memory.Backend.HindsightREST do
 
   ## Configuration
 
-  Configure in `~/.llm_core/config.yml`:
+  Configure in `llm_core.toml` (select this backend and set its options):
 
-  ```yaml
-  memory:
-    hindsight:
-      url: http://localhost:8888
-      enabled: true
-      default_bank_id: platform
-      cache_ttl_ms: 300000
+  ```toml
+  [memory]
+  backend = "hindsight_rest"
+
+  [memory.hindsight_rest]
+  enabled = true
+  url = "http://localhost:8888"
+  default_bank_id = "platform"
+  timeout_recall_ms = 4000
+  timeout_reflect_ms = 5000
   ```
+
+  `[memory.hindsight]` is accepted as a legacy alias for
+  `[memory.hindsight_rest]`. This is the default backend, so it is active
+  even when `[memory].backend` is unset.
 
   ## Usage
 

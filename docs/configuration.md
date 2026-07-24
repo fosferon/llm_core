@@ -209,9 +209,29 @@ Each entry includes: `id`, `aliases`, `binary`, `available?`, `install_hint`,
 
 ### Memory settings
 
-The `[memory.hindsight]` section feeds runtime overrides. Any key in the struct
-(`timeout_*`, `cache_*`, `retain_raw_llm`, `default_bank_id`) can be set here or
-via `HINDSIGHT_*` env vars.
+`[memory].backend` selects the semantic-memory implementation. The default is
+`hindsight_rest`, so existing setups need no change:
+
+```toml
+[memory]
+backend = "hindsight_rest" # hindsight_rest | foresight_http | foresight_inprocess
+```
+
+Per-backend options live under a matching section:
+
+- `[memory.hindsight_rest]` (alias: `[memory.hindsight]`) — Hindsight 0.4+ REST.
+  Any key in the config struct (`url`, `default_bank_id`, `timeout_*`, `cache_*`,
+  `retain_raw_llm`) can be set here or via `HINDSIGHT_*` env vars.
+- `[memory.foresight_http]` — Foresight's Hindsight-compatible HTTP endpoint.
+  Shares the cache, circuit breaker, retry, and write buffer. Defaults `url` to
+  `http://localhost:4012` when unset.
+- `[memory.foresight_inprocess]` — optional. The consuming application must
+  depend on Foresight and start `Foresight.Supervisor`; `llm_core` resolves the
+  integration at runtime to avoid a circular package dependency.
+
+All backends implement `LlmCore.Memory.Backend` and are reached through the
+`LlmCore.Memory` facade (`LlmCore.retain/2`, `LlmCore.recall/2`,
+`LlmCore.reflect/2`).
 
 ## Mix task helpers
 
