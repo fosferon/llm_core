@@ -204,8 +204,8 @@ defmodule LlmCore.LLM.Appliance do
         )
 
       case result do
-        {:ok, %Req.Response{status: status}} when status >= 400 ->
-          send(parent, {:appliance_error, ref, classify_error(status, %{})})
+        {:ok, %Req.Response{status: status, body: body}} when status >= 400 ->
+          send(parent, {:appliance_error, ref, classify_error(status, body)})
 
         {:error, exception} ->
           send(parent, {:appliance_error, ref, exception})
@@ -259,7 +259,26 @@ defmodule LlmCore.LLM.Appliance do
 
   defp receive_stream_chunks(:done), do: {:halt, :done}
 
-  defp build_response(body, _opts) do
+  @doc false
+  @spec build_response(any(), keyword()) :: LlmCore.LLM.Response.t()
+  def build_response(body, _opts) when not is_map(body) do
+    # Non-map bodies must not crash the parser. OpenAI-compatible servers
+    # (notably LM Studio on idle model-unload) can answer with a bare JSON
+    # string such as "Model unloaded.", and a misbehaving server may return a
+    # list or nil. `body["key"]` and `get_in/2` raise on binaries/lists, so we
+    # surface any string content safely and keep the raw body for diagnostics.
+    Response.new(
+      content: content_string(body),
+      provider: :appliance,
+      model: nil,
+      usage: %{},
+      tool_calls: nil,
+      raw: body,
+      metadata: %{id: nil, finish_reason: nil}
+    )
+  end
+
+  def build_response(body, _opts) do
     choice = body["choices"] |> List.first() || %{}
     message = choice["message"] || %{}
     finish_reason = choice["finish_reason"]
@@ -294,7 +313,9 @@ defmodule LlmCore.LLM.Appliance do
     )
   end
 
-  defp classify_error(status, body) do
+  @doc false
+  @spec classify_error(integer(), term()) :: LlmCore.LLM.Error.t()
+  def classify_error(status, body) do
     type =
       cond do
         status in [401, 403] -> :authentication
@@ -303,19 +324,32 @@ defmodule LlmCore.LLM.Appliance do
         true -> :provider_error
       end
 
-    message =
-      body
-      |> get_in(["error", "message"])
-      |> case do
-        nil -> "Appliance API error (status #{status})"
-        msg -> msg
-      end
-
     Error.new(type,
-      message: message,
+      message: error_message(status, body),
       provider: :appliance,
       details: %{status: status, body: body}
     )
+  end
+
+  # Body access is total. LM Studio (and other OpenAI-compatible servers) may
+  # return a bare JSON string body — e.g. "Model unloaded." on idle unload —
+  # instead of an object. `get_in/2` raises FunctionClauseError on binaries and
+  # ArgumentError on lists, so we guard with `is_map/1`. The bare-string body is
+  # genuinely useful diagnostic text, so preserve it as the message rather than
+  # letting the previous crash throw it away.
+  defp error_message(status, body) when is_map(body) do
+    case get_in(body, ["error", "message"]) do
+      nil -> "Appliance API error (status #{status})"
+      msg -> msg
+    end
+  end
+
+  defp error_message(_status, body) when is_binary(body) and byte_size(body) > 0 do
+    body
+  end
+
+  defp error_message(status, _body) do
+    "Appliance API error (status #{status})"
   end
 
   defp extract_delta(%{"choices" => [%{"delta" => %{"content" => content}} | _]}) do
