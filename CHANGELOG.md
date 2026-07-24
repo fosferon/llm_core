@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.6.1 — 2026-07-24
+
+### Fixed
+- `LlmCore.LLM.Appliance` no longer raises when the appliance returns a
+  non-map response body. LM Studio sends a bare JSON string (e.g.
+  `"Model unloaded."`) on idle model-unload; `classify_error/2` and
+  `build_response/2` now handle binary, list, and `nil` bodies without
+  crashing, and the bare-string body is preserved as the error message for
+  diagnostics. Previously the error formatter raised `FunctionClauseError`
+  on the body, which made the error unmatchable by downstream
+  `{:error, _}` fallback chains.
+
 ## 0.6.0 — 2026-07-24
 
 ### Added
