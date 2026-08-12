@@ -250,7 +250,7 @@ mix llm_core.config.set --path telemetry.sample_rate --value 0.25 --type float
 mix llm_core.config.validate
 ```
 
-See the [Configuration Guide](docs/configuration.md) for the full TOML schema, environment variable interpolation, and agent registration rules.
+See the [Configuration Guide](https://hexdocs.pm/llm_core/configuration.html) for the full TOML schema, environment variable interpolation, and agent registration rules.
 
 ## Architecture
 
@@ -278,7 +278,7 @@ Three ALF pipelines handle the core flows:
 - **Routing Pipeline** — parse task type → load routing config → match rules → resolve agent or apply fallback
 - **Memory Pipeline** — route operation (retain/recall/reflect) → circuit breaker gate → retry with backoff → update cache
 
-See the [Architecture Guide](docs/architecture.md) for pipeline internals, provider behaviour contracts, and the agent loop design.
+See the [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) for pipeline internals, provider behaviour contracts, and the agent loop design.
 
 ## Telemetry Events
 
@@ -320,10 +320,10 @@ See the [Architecture Guide](docs/architecture.md) for pipeline internals, provi
 
 ## Documentation
 
-- [Configuration Guide](docs/configuration.md) — Full TOML schema, layered config, mix tasks
-- [Architecture Guide](docs/architecture.md) — Pipeline design, provider system, memory integration
-- [CLI Providers](docs/cli-providers.md) — Adding and configuring CLI-based providers
-- [Agent Loop](docs/agent-loop.md) — Tool-calling loops, context, pipeline stages
+- [Configuration Guide](https://hexdocs.pm/llm_core/configuration.html) — Full TOML schema, layered config, mix tasks
+- [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) — Pipeline design, provider system, memory integration
+- [CLI Providers](https://hexdocs.pm/llm_core/cli-providers.html) — Adding and configuring CLI-based providers
+- [Agent Loop](https://hexdocs.pm/llm_core/agent-loop.html) — Tool-calling loops, context, pipeline stages
 
 ## License
 

@@ -1,7 +1,7 @@
 defmodule LlmCore.MixProject do
   use Mix.Project
 
-  @version "0.6.1"
+  @version "0.6.2"
   @source_url "https://github.com/fosferon/llm_core"
 
   def project do
@@ -37,7 +37,8 @@ defmodule LlmCore.MixProject do
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url
-      }
+      },
+      files: ~w(lib priv mix.exs README.md LICENSE CHANGELOG.md .formatter.exs docs)
     ]
   end
 
