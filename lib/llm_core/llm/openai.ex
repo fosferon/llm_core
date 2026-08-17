@@ -254,6 +254,7 @@ defmodule LlmCore.LLM.OpenAI do
       completion_tokens: completion,
       total_tokens: total
     }
+    |> maybe_put_cached_tokens(usage)
   end
 
   defp usage_from_openai(%{"total_tokens" => total}) do
@@ -261,6 +262,17 @@ defmodule LlmCore.LLM.OpenAI do
   end
 
   defp usage_from_openai(_), do: %{}
+
+  # OpenAI-compatible providers report prompt-cache hits in
+  # usage.prompt_tokens_details.cached_tokens (OpenAI, z.ai, Kimi, DeepSeek...).
+  # cached_tokens is a subset of prompt_tokens, already billed by the provider
+  # at its (much lower) cached rate — surfaced so callers can measure hit rates
+  # and true input cost instead of re-billing cache at full price (gc_daemon#3).
+  defp maybe_put_cached_tokens(acc, %{"prompt_tokens_details" => %{"cached_tokens" => cached}})
+       when is_integer(cached),
+       do: Map.put(acc, :cached_tokens, cached)
+
+  defp maybe_put_cached_tokens(acc, _usage), do: acc
 
   @spec maybe_put_tools(map(), [LlmToolkit.Tool.t()] | nil) :: map()
   defp maybe_put_tools(body, nil), do: body
