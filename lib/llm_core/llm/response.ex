@@ -10,7 +10,10 @@ defmodule LlmCore.LLM.Response do
     * `content` - The main text content of the response
     * `provider` - Atom identifying the provider (e.g., `:claude_code`, `:openai`)
     * `model` - String identifying the model used (e.g., "claude-3-opus", "gpt-4")
-    * `usage` - Map with token usage info (prompt_tokens, completion_tokens, total_tokens)
+    * `usage` - Map with token usage info (prompt_tokens, completion_tokens, total_tokens;
+      plus `cached_tokens` when the provider reports prompt-cache hits — OpenAI-compatible
+      `prompt_tokens_details.cached_tokens`, or Anthropic `cache_read_input_tokens` — and
+      `cache_creation_input_tokens` for Anthropic cache writes)
     * `raw` - The raw response from the provider for debugging/passthrough
     * `metadata` - Additional provider-specific metadata (latency, request_id, etc.)
     * `structured` - Parsed/validated structured output (when requested)
