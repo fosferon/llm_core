@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.6.3 — 2026-09-23
+
+### Fixed
+
+- `LlmCore.Agent.Loop` no longer accepts an empty stop response (no tool
+  calls, blank content) as successful completion (GC-5523). Some
+  OpenAI-compatible backends (observed on Ollama `gpt-oss:120b` behind the
+  DGX Spark appliance route) occasionally return HTTP success with
+  `finish_reason: "stop"`, empty content, and no tool calls while a
+  tool-driven task is still incomplete. Previously `ParseToolCalls`
+  treated any no-tool response as final, so the loop returned a blank
+  success and downstream consumers could only report empty content.
+- Blank-stop responses are now retried under a separately bounded policy:
+  `:max_blank_stops` (default 3) consecutive blanks per iteration, with an
+  optional `:blank_stop_nudge` user message injected before each retry.
+  Retries do not consume the iteration budget. Repeated blanks terminate
+  with the typed error `{:empty_stop, %{iteration:, attempts:,
+  finish_reasons:, provider:, model:}}`.
+- A response that completes only after blank-stop retries is marked with
+  `response.metadata.blank_stop_retries`.
+- `LlmCore.LLM.Native` now preserves bounded terminal diagnostics:
+  provider metadata (finish reason, request id) survives the success
+  path, and the typed `{:empty_stop, details}` error carries its
+  iteration/finish-reason context through as `Error.details` instead of
+  collapsing to a generic inspect string.
+
 ## 0.6.1 — 2026-07-24
 
 ### Fixed

@@ -8,6 +8,7 @@ defmodule LlmCore.Agent.Components.LoopDecision do
 
   If no tool calls survived validation and the decision was not already set
   to `:done` by `ParseToolCalls`, this stage defaults to `{:done, response}`.
+  Blank-stop decisions pass through untouched — the outer loop owns them.
 
   Emits the `[:llm_core, :agent, :loop_iteration]` telemetry event.
 
@@ -35,6 +36,7 @@ defmodule LlmCore.Agent.Components.LoopDecision do
   @spec call(Context.t(), keyword()) :: Context.t()
   def call(%Context{status: :error} = ctx, _opts), do: ctx
   def call(%Context{decision: {:done, _}} = ctx, _opts), do: ctx
+  def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
 
   def call(%Context{result_messages: [_ | _] = msgs} = ctx, _opts) do
     :telemetry.execute(

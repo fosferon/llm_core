@@ -37,6 +37,7 @@ defmodule LlmCore.Agent.Components.ValidateCalls do
   @spec call(Context.t(), keyword()) :: Context.t()
   def call(%Context{status: :error} = ctx, _opts), do: ctx
   def call(%Context{decision: {:done, _}} = ctx, _opts), do: ctx
+  def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
 
   def call(%Context{tool_calls: calls, tools: tools} = ctx, _opts) do
     tool_map = Map.new(tools, &{&1.name, &1})

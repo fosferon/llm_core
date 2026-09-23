@@ -31,6 +31,7 @@ defmodule LlmCore.Agent.Components.InjectResults do
   @spec call(Context.t(), keyword()) :: Context.t()
   def call(%Context{status: :error} = ctx, _opts), do: ctx
   def call(%Context{decision: {:done, _}} = ctx, _opts), do: ctx
+  def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
 
   def call(%Context{response: response, tool_calls: calls, tool_results: results} = ctx, _opts) do
     # The assistant message that requested the tool calls
