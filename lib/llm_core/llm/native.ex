@@ -87,7 +87,7 @@ defmodule LlmCore.LLM.Native do
   # Maps a Loop.run result to the provider-boundary Response/Error.
   # `@doc false` public for direct testing.
   #
-  # Preserves bounded terminal diagnostics (GC-5523): provider metadata
+  # Preserves bounded terminal diagnostics: provider metadata
   # (finish reason, request id) survives success, and the typed
   # `{:empty_stop, details}` error carries its iteration/finish-reason
   # context through as Error details instead of collapsing to a generic

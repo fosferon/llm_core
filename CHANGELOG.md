@@ -8,8 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - `LlmCore.Agent.Loop` no longer accepts an empty stop response (no tool
   calls, blank content) as successful completion (GC-5523). Some
-  OpenAI-compatible backends (observed on Ollama `gpt-oss:120b` behind the
-  DGX Spark appliance route) occasionally return HTTP success with
+  OpenAI-compatible backends (observed on Ollama `gpt-oss:120b`)
+  occasionally return HTTP success with
   `finish_reason: "stop"`, empty content, and no tool calls while a
   tool-driven task is still incomplete. Previously `ParseToolCalls`
   treated any no-tool response as final, so the loop returned a blank

@@ -9,7 +9,7 @@ defmodule LlmCore.Agent.Loop do
   A no-tool-call response with blank content (`:blank_stop`) is never
   accepted as completion. The loop retries the turn under a separately
   bounded recovery policy (`:max_blank_stops`) and terminates with a
-  typed `{:empty_stop, details}` error when blanks repeat (GC-5523).
+  typed `{:empty_stop, details}` error when blanks repeat.
 
   The loop owns iteration control and message accumulation. The pipeline
   (`LlmCore.Agent.Pipeline.Iteration`) owns per-iteration processing logic.
@@ -60,7 +60,7 @@ defmodule LlmCore.Agent.Loop do
 
   @default_max_iterations 10
 
-  # Bounded recovery for degenerate empty-stop responses (GC-5523):
+  # Bounded recovery for degenerate empty-stop responses:
   # a provider returns HTTP success with finish_reason "stop", blank
   # content, and no tool calls while the task is still incomplete.
   # Per iteration, tolerate up to this many consecutive blank stops before
@@ -192,7 +192,7 @@ defmodule LlmCore.Agent.Loop do
     recover_blank_stops(state, llm_send_fn, llm_opts, iteration, %{attempts: 0, finish_reasons: []})
   end
 
-  # Separately bounded blank-stop recovery (GC-5523).
+  # Separately bounded blank-stop recovery.
   #
   # A blank stop (no tool calls, blank content) retries the same iteration
   # without consuming the iteration budget. After `max_blank_stops`

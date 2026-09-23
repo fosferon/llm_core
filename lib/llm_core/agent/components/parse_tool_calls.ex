@@ -75,7 +75,7 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
 
       _ ->
         # No tool calls. Either a final text response, or a degenerate
-        # empty stop that the outer loop must recover from (GC-5523).
+        # empty stop that the outer loop must recover from.
         if blank_stop?(response) do
           %{ctx | decision: {:blank_stop, response}, trace: ctx.trace ++ [:parse_blank_stop]}
         else
@@ -86,7 +86,7 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
 
   # A no-tool-call response is a blank stop when its text content is nil or
   # whitespace-only and it carries no structured output. Such a response
-  # conveys nothing — it cannot be a valid final answer (GC-5523).
+  # conveys nothing — it cannot be a valid final answer.
   defp blank_stop?(%{content: content, structured: nil}) when is_binary(content) do
     String.trim(content) == ""
   end
