@@ -7,8 +7,9 @@ defmodule LlmCore.Agent.Components.BudgetGuard do
   decision. Future extensions may add token budget and cost budget
   enforcement.
 
-  Skips processing when the decision is already `:done` (no tool calls)
-  or when the pipeline is in error status.
+  Skips processing when the decision is already `:done` (no tool calls),
+  `:blank_stop` (degenerate empty stop — the outer loop recovers), or when
+  the pipeline is in error status.
 
   Analogous to budget guard clauses in step-oriented loop executors:
   that check recursion depth before proceeding.
@@ -33,6 +34,7 @@ defmodule LlmCore.Agent.Components.BudgetGuard do
   @spec call(Context.t(), keyword()) :: Context.t()
   def call(%Context{status: :error} = ctx, _opts), do: ctx
   def call(%Context{decision: {:done, _}} = ctx, _opts), do: ctx
+  def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
 
   def call(%Context{iteration: i, max_iterations: max} = ctx, _opts) when i >= max - 1 do
     %{

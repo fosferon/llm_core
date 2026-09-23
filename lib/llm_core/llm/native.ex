@@ -81,31 +81,59 @@ defmodule LlmCore.LLM.Native do
 
     elapsed = System.monotonic_time(:millisecond) - start
 
-    case result do
-      {:ok, llm_response, _messages} ->
-        text = llm_response.content || ""
+    build_send_result(result, elapsed)
+  end
 
-        {:ok,
-         Response.new(
-           content: text,
-           provider: :native,
-           metadata: %{elapsed_ms: elapsed, model: llm_response.model, usage: llm_response.usage}
-         )}
+  # Maps a Loop.run result to the provider-boundary Response/Error.
+  # `@doc false` public for direct testing.
+  #
+  # Preserves bounded terminal diagnostics (GC-5523): provider metadata
+  # (finish reason, request id) survives success, and the typed
+  # `{:empty_stop, details}` error carries its iteration/finish-reason
+  # context through as Error details instead of collapsing to a generic
+  # inspect string.
+  @doc false
+  @spec build_send_result(term(), integer()) ::
+          {:ok, Response.t()} | {:error, Error.t()}
+  def build_send_result({:ok, llm_response, _messages}, elapsed) do
+    text = llm_response.content || ""
 
-      {:error, :max_iterations_reached} ->
-        {:error,
-         Error.new(:provider_error,
-           message: "Iteration limit reached (#{@max_iterations})",
-           provider: :native
-         )}
+    metadata =
+      Map.merge(llm_response.metadata || %{}, %{
+        elapsed_ms: elapsed,
+        model: llm_response.model,
+        usage: llm_response.usage
+      })
 
-      {:error, reason} ->
-        {:error,
-         Error.new(:provider_error,
-           message: "Native dispatch error: #{inspect(reason)}",
-           provider: :native
-         )}
-    end
+    {:ok, Response.new(content: text, provider: :native, metadata: metadata)}
+  end
+
+  def build_send_result({:error, :max_iterations_reached}, _elapsed) do
+    {:error,
+     Error.new(:provider_error,
+       message: "Iteration limit reached (#{@max_iterations})",
+       provider: :native
+     )}
+  end
+
+  def build_send_result({:error, {:empty_stop, details}}, _elapsed)
+      when is_map(details) do
+    {:error,
+     Error.new(:provider_error,
+       message:
+         "Native dispatch ended with repeated empty stop responses (blank content, no tool calls) " <>
+           "after #{Map.get(details, :attempts)} attempts at iteration #{Map.get(details, :iteration)}",
+       provider: :native,
+       details: details
+     )}
+  end
+
+  def build_send_result({:error, reason}, _elapsed) do
+    {:error,
+     Error.new(:provider_error,
+       message: "Native dispatch error: #{inspect(reason)}",
+       provider: :native
+     )}
   end
 
   @impl true
@@ -154,7 +182,9 @@ defmodule LlmCore.LLM.Native do
   - `{:ok, response, messages}` from `run_fn` → returned immediately.
   - `{:error, :max_iterations_reached}` → returned immediately (reasoning
     failure, not a provider outage — retrying elsewhere won't help).
-  - Any other `{:error, reason}` → logs and advances to the next candidate.
+  - Any other `{:error, reason}` (including the typed `{:empty_stop, _}` —
+    provider-specific degenerate output may not repeat on another backend)
+    → logs and advances to the next candidate.
   - Empty list → `{:error, :no_provider_succeeded}`.
 
   Exposed for direct testing; production call sites go through `send/2`.

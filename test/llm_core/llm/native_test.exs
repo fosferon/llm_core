@@ -1,12 +1,82 @@
 defmodule LlmCore.LLM.NativeTest do
   use ExUnit.Case, async: true
 
+  alias LlmCore.LLM.Error
   alias LlmCore.LLM.Native
+  alias LlmCore.LLM.Response
 
   # try_cascade/2 is the runtime-failure walker used by Native.send
   # to iterate through candidates on provider error. We test it with a
   # stubbed runner function so the behavior is exercised without real
   # HTTP calls.
+
+  # build_send_result/2 maps a Loop.run result to the provider boundary,
+  # preserving bounded terminal diagnostics (GC-5523).
+
+  describe "build_send_result/2" do
+    test "success preserves provider metadata including finish_reason" do
+      llm_response = %Response{
+        content: "audit complete",
+        provider: :appliance,
+        model: "gpt-oss:120b",
+        usage: %{total_tokens: 5},
+        metadata: %{finish_reason: "stop", id: "req_1"}
+      }
+
+      assert {:ok, native} = Native.build_send_result({:ok, llm_response, []}, 42)
+
+      assert native.content == "audit complete"
+      assert native.provider == :native
+      assert native.metadata.finish_reason == "stop"
+      assert native.metadata.id == "req_1"
+      assert native.metadata.model == "gpt-oss:120b"
+      assert native.metadata.elapsed_ms == 42
+      assert native.metadata.usage == %{total_tokens: 5}
+    end
+
+    test "success preserves blank-stop recovery marker" do
+      llm_response = %Response{content: "ok", metadata: %{blank_stop_retries: 1}}
+
+      assert {:ok, native} = Native.build_send_result({:ok, llm_response, []}, 1)
+
+      assert native.metadata.blank_stop_retries == 1
+    end
+
+    test "typed empty_stop error preserves iteration and finish-reason context" do
+      details = %{
+        iteration: 2,
+        attempts: 3,
+        finish_reasons: ["stop", "stop", "stop"],
+        provider: :appliance,
+        model: "gpt-oss:120b"
+      }
+
+      assert {:error, %Error{} = error} =
+               Native.build_send_result({:error, {:empty_stop, details}}, 5)
+
+      assert error.type == :provider_error
+      assert error.provider == :native
+      assert error.details == details
+      assert error.message =~ "empty stop"
+      assert error.message =~ "3 attempts"
+      assert error.message =~ "iteration 2"
+    end
+
+    test "max_iterations_reached keeps its dedicated message" do
+      assert {:error, %Error{} = error} =
+               Native.build_send_result({:error, :max_iterations_reached}, 5)
+
+      assert error.message =~ "Iteration limit reached"
+    end
+
+    test "generic errors keep the inspect fallback" do
+      assert {:error, %Error{} = error} =
+               Native.build_send_result({:error, :econnrefused}, 5)
+
+      assert error.message =~ ":econnrefused"
+      assert error.details == nil
+    end
+  end
 
   describe "try_cascade/2" do
     test "returns first candidate's success without calling the rest" do
@@ -84,6 +154,20 @@ defmodule LlmCore.LLM.NativeTest do
 
       assert {:error, :max_iterations_reached} = Native.try_cascade(candidates, run)
       assert :counters.get(calls, 1) == 1
+    end
+
+    test "empty_stop advances the cascade to the next provider (GC-5523)" do
+      # A degenerate backend (blank stop after blank stop) is provider-specific
+      # behavior — another backend may complete the same task.
+      run = fn
+        {Mod1, _, _} -> {:error, {:empty_stop, %{iteration: 2, attempts: 3}}}
+        {Mod2, _, _} -> {:ok, %{content: "completed on fallback"}, []}
+      end
+
+      candidates = [{Mod1, "m1", []}, {Mod2, "m2", []}]
+
+      assert {:ok, %{content: "completed on fallback"}, []} =
+               Native.try_cascade(candidates, run)
     end
 
     test "empty candidate list returns a clear error" do

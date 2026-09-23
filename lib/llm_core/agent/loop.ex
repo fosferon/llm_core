@@ -6,6 +6,11 @@ defmodule LlmCore.Agent.Loop do
   if the pipeline says `:continue`, append messages and call the LLM again;
   if `:done`, return the final response.
 
+  A no-tool-call response with blank content (`:blank_stop`) is never
+  accepted as completion. The loop retries the turn under a separately
+  bounded recovery policy (`:max_blank_stops`) and terminates with a
+  typed `{:empty_stop, details}` error when blanks repeat (GC-5523).
+
   The loop owns iteration control and message accumulation. The pipeline
   (`LlmCore.Agent.Pipeline.Iteration`) owns per-iteration processing logic.
 
@@ -49,9 +54,19 @@ defmodule LlmCore.Agent.Loop do
           | {:pipeline_opts, keyword()}
           | {:llm_opts, keyword()}
           | {:terminal_tool, String.t() | nil}
+          | {:max_blank_stops, pos_integer()}
+          | {:blank_stop_nudge, String.t() | nil}
         ]
 
   @default_max_iterations 10
+
+  # Bounded recovery for degenerate empty-stop responses (GC-5523):
+  # a provider returns HTTP success with finish_reason "stop", blank
+  # content, and no tool calls while the task is still incomplete.
+  # Per iteration, tolerate up to this many consecutive blank stops before
+  # terminating with a typed {:empty_stop, details} error. Retries do not
+  # consume the normal iteration budget — the two budgets are separate.
+  @default_max_blank_stops 3
 
   # When the same tool error repeats this many times consecutively,
   # break out of the loop — it's a systematic bug, not a transient failure.
@@ -86,11 +101,21 @@ defmodule LlmCore.Agent.Loop do
         The tool is not dispatched; its raw arguments are attached to
         `response.metadata.terminal_args`, with the call under
         `response.metadata.terminal_tool_call`.
+      * `:max_blank_stops` — max consecutive blank-stop responses tolerated
+        per iteration before the typed `{:empty_stop, details}` error
+        (default: #{@default_max_blank_stops}). Blank-stop retries do not
+        consume the iteration budget.
+      * `:blank_stop_nudge` — optional user-message text appended to the
+        messages before a blank-stop retry, to break a degenerate provider
+        mode. When unset (default), the turn is retried with unchanged
+        messages.
 
   ## Returns
 
     * `{:ok, final_response, final_messages}` — LLM produced a text response
-    * `{:error, reason}` — Budget exceeded, LLM error, or pipeline error
+    * `{:error, reason}` — Budget exceeded, LLM error, pipeline error, or
+      repeated blank stops (`{:empty_stop, %{iteration:, attempts:,
+      finish_reasons:, provider:, model:}}`)
 
   ## Telemetry
 
@@ -105,6 +130,8 @@ defmodule LlmCore.Agent.Loop do
     resolver_module = Keyword.get(opts, :resolver_module)
     terminal_tool = Keyword.get(opts, :terminal_tool)
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
+    max_blank_stops = Keyword.get(opts, :max_blank_stops, @default_max_blank_stops)
+    blank_stop_nudge = Keyword.get(opts, :blank_stop_nudge)
     on_iteration = Keyword.get(opts, :on_iteration)
     pipeline_opts = Keyword.get(opts, :pipeline_opts, sync: true)
     llm_opts = [tools: tools] ++ Keyword.get(opts, :llm_opts, [])
@@ -118,6 +145,8 @@ defmodule LlmCore.Agent.Loop do
       resolver_module: resolver_module,
       terminal_tool: terminal_tool,
       max_iterations: max_iterations,
+      max_blank_stops: max_blank_stops,
+      blank_stop_nudge: blank_stop_nudge,
       on_iteration: on_iteration,
       total_tool_calls: 0,
       last_error: nil,
@@ -160,10 +189,69 @@ defmodule LlmCore.Agent.Loop do
           | {:done, LlmCore.LLM.Response.t(), [map()], non_neg_integer()}
           | {:error, term()}
   defp do_iteration(state, llm_send_fn, llm_opts, iteration) do
-    # 1. Call LLM
+    recover_blank_stops(state, llm_send_fn, llm_opts, iteration, %{attempts: 0, finish_reasons: []})
+  end
+
+  # Separately bounded blank-stop recovery (GC-5523).
+  #
+  # A blank stop (no tool calls, blank content) retries the same iteration
+  # without consuming the iteration budget. After `max_blank_stops`
+  # consecutive blanks the loop terminates with the typed error
+  # `{:empty_stop, details}` carrying bounded terminal diagnostics:
+  # iteration number, attempt count, and the observed finish reasons.
+  @spec recover_blank_stops(map(), llm_send_fn(), keyword(), non_neg_integer(), map()) ::
+          {:continue, map()}
+          | {:done, LlmCore.LLM.Response.t(), [map()], non_neg_integer()}
+          | {:error, term()}
+  defp recover_blank_stops(state, llm_send_fn, llm_opts, iteration, recovery) do
     case llm_send_fn.(state.messages, llm_opts) do
       {:ok, response} ->
-        process_response(state, response, iteration)
+        case process_response(state, response, iteration) do
+          {:blank_stop, blank} ->
+            attempts = recovery.attempts + 1
+            finish_reasons = recovery.finish_reasons ++ [finish_reason(blank)]
+
+            if attempts >= state.max_blank_stops do
+              require Logger
+
+              Logger.warning(
+                "[Agent.Loop] Empty stop: #{attempts} consecutive blank responses at iteration #{iteration} — terminating"
+              )
+
+              {:error,
+               {:empty_stop,
+                %{
+                  iteration: iteration,
+                  attempts: attempts,
+                  finish_reasons: finish_reasons,
+                  provider: blank.provider,
+                  model: blank.model
+                }}}
+            else
+              require Logger
+
+              Logger.warning(
+                "[Agent.Loop] Blank stop (attempt #{attempts}/#{state.max_blank_stops}) at iteration #{iteration} — retrying"
+              )
+
+              state = maybe_push_nudge(state)
+
+              recover_blank_stops(state, llm_send_fn, llm_opts, iteration, %{
+                attempts: attempts,
+                finish_reasons: finish_reasons
+              })
+            end
+
+          {:done, response, messages, tool_calls} ->
+            if recovery.attempts > 0 do
+              {:done, mark_blank_recovery(response, recovery.attempts), messages, tool_calls}
+            else
+              {:done, response, messages, tool_calls}
+            end
+
+          other ->
+            other
+        end
 
       {:error, reason} ->
         {:error, {:llm_error, reason}}
@@ -173,6 +261,7 @@ defmodule LlmCore.Agent.Loop do
   @spec process_response(map(), LlmCore.LLM.Response.t(), non_neg_integer()) ::
           {:continue, map()}
           | {:done, LlmCore.LLM.Response.t(), [map()], non_neg_integer()}
+          | {:blank_stop, LlmCore.LLM.Response.t()}
           | {:error, term()}
   defp process_response(state, response, iteration) do
     # 2. Build pipeline context
@@ -198,6 +287,7 @@ defmodule LlmCore.Agent.Loop do
   @spec handle_pipeline_result(Context.t() | term(), map()) ::
           {:continue, map()}
           | {:done, LlmCore.LLM.Response.t(), [map()], non_neg_integer()}
+          | {:blank_stop, LlmCore.LLM.Response.t()}
           | {:error, term()}
   defp handle_pipeline_result(%Context{decision: {:done, final_response}} = result_ctx, state) do
     maybe_notify(state.on_iteration, result_ctx)
@@ -240,6 +330,11 @@ defmodule LlmCore.Agent.Loop do
 
       {:continue, updated_state}
     end
+  end
+
+  defp handle_pipeline_result(%Context{decision: {:blank_stop, response}} = result_ctx, state) do
+    maybe_notify(state.on_iteration, result_ctx)
+    {:blank_stop, response}
   end
 
   defp handle_pipeline_result(%Context{decision: {:error, reason}} = result_ctx, state) do
@@ -302,6 +397,27 @@ defmodule LlmCore.Agent.Loop do
 
     %{response | metadata: metadata}
   end
+
+  # -- Blank-stop recovery helpers ---------------------------------------------
+
+  # Optional nudge message appended before a blank-stop retry. Breaks a
+  # degenerate provider mode without changing the default retry contract
+  # (unchanged messages).
+  defp maybe_push_nudge(%{blank_stop_nudge: nil} = state), do: state
+
+  defp maybe_push_nudge(%{blank_stop_nudge: nudge} = state) when is_binary(nudge) do
+    %{state | messages: state.messages ++ [%{role: :user, content: nudge}]}
+  end
+
+  # Mark a response that succeeded only after blank-stop retries, so
+  # downstream consumers can see recovery happened (bounded metadata).
+  defp mark_blank_recovery(response, attempts) do
+    metadata = Map.merge(response.metadata || %{}, %{blank_stop_retries: attempts})
+    %{response | metadata: metadata}
+  end
+
+  defp finish_reason(%{metadata: %{finish_reason: finish_reason}}), do: finish_reason
+  defp finish_reason(_response), do: nil
 
   # -- Helpers ----------------------------------------------------------------
 

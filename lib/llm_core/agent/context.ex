@@ -34,11 +34,16 @@ defmodule LlmCore.Agent.Context do
 
   ### Output — read by the outer loop after pipeline exit
 
-    * `decision` — `{:continue, messages}`, `{:done, response}`, or
-      `{:error, reason}`
+    * `decision` — `{:continue, messages}`, `{:done, response}`,
+      `{:blank_stop, response}`, or `{:error, reason}`
     * `status` — `:ok` or `:error` (short-circuit flag for stages)
     * `error` — Error detail when `status == :error`
     * `trace` — Accumulated trace entries for observability
+
+  `{:blank_stop, response}` marks a no-tool-call response whose content is
+  blank (nil/whitespace) — a degenerate provider completion that must not be
+  accepted as final. The outer loop owns the separately bounded recovery
+  policy for this decision.
   """
 
   alias LlmCore.LLM.Response
@@ -49,6 +54,7 @@ defmodule LlmCore.Agent.Context do
   @type decision ::
           {:continue, [map()]}
           | {:done, Response.t()}
+          | {:blank_stop, Response.t()}
           | {:error, term()}
           | nil
 
