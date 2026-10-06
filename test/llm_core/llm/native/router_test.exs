@@ -61,6 +61,19 @@ defmodule LlmCore.LLM.Native.RouterTest do
     end
 
     Store.put(:config, :providers, @providers)
+
+    # Providers declaring an auth credential are only usable when it resolves.
+    keys = ["ZAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+    saved = for k <- keys, do: {k, System.get_env(k)}
+    Enum.each(keys, &System.put_env(&1, "test-key"))
+
+    on_exit(fn ->
+      Enum.each(saved, fn
+        {k, nil} -> System.delete_env(k)
+        {k, v} -> System.put_env(k, v)
+      end)
+    end)
+
     :ok
   end
 
@@ -315,6 +328,94 @@ defmodule LlmCore.LLM.Native.RouterTest do
 
       assert {:ok, {LlmCore.LLM.OpenAI, "mistral-large", _}} =
                Router.resolve("mistral-large", config, appliance_has_model: false)
+    end
+  end
+
+  describe "usability: skipped candidates and the fallback provider" do
+    test "a cascade member whose credential is unset is skipped, not attempted" do
+      System.delete_env("ANTHROPIC_API_KEY")
+      config = %{cascade: ["anthropic", "zai"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Zai, "glm-5.1", _}] = Router.candidates(nil, config)
+      assert [%{provider: "anthropic", reason: :no_credentials}] = Router.skipped(config)
+    end
+
+    test "a blank credential counts as unset" do
+      System.put_env("ANTHROPIC_API_KEY", "")
+      config = %{cascade: ["anthropic"], default_models: %{}, model_routing: []}
+
+      assert [] = Router.candidates(nil, config)
+      assert [%{reason: :no_credentials}] = Router.skipped(config)
+    end
+
+    test "disabled and unknown providers are skipped with a reason" do
+      providers = Map.put(@providers, "zai", %{@providers["zai"] | enabled: false})
+      Store.put(:config, :providers, providers)
+      config = %{cascade: ["zai", "ghost", "anthropic"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Anthropic, _, _}] = Router.candidates(nil, config)
+
+      assert [
+               %{provider: "zai", reason: :disabled},
+               %{provider: "ghost", reason: :no_provider}
+             ] = Router.skipped(config)
+    end
+
+    test "a CLI provider cannot run the native loop and is skipped" do
+      cli = %Definition{
+        id: "some_cli",
+        module: LlmCore.LLM.CLIProvider,
+        provider_kind: :cli,
+        aliases: ["some_cli"]
+      }
+
+      Store.put(:config, :providers, Map.put(@providers, "some_cli", cli))
+      config = %{cascade: ["some_cli", "zai"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Zai, _, _}] = Router.candidates(nil, config)
+      assert [%{provider: "some_cli", reason: :not_native}] = Router.skipped(config)
+    end
+
+    test "a model-routing target that is unusable falls through to the cascade" do
+      System.delete_env("OPENAI_API_KEY")
+
+      config = %{
+        cascade: ["zai"],
+        default_models: %{},
+        model_routing: [%{"pattern" => "gpt", "provider" => "openai"}]
+      }
+
+      assert [{LlmCore.LLM.Zai, "gpt-oss:120b", _} | _] =
+               Router.candidates("gpt-oss:120b", config)
+    end
+
+    test "an explicitly named provider is returned even without a credential" do
+      System.delete_env("ANTHROPIC_API_KEY")
+      assert {:ok, {LlmCore.LLM.Anthropic, _, _}} = Router.resolve_provider("anthropic")
+    end
+
+    test "no cascade configured: the fallback (routing default) is the only candidate" do
+      empty = %{cascade: [], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Zai, "glm-5.1", _}] = Router.candidates(nil, empty, fallback: "zai")
+      assert [] = Router.candidates(nil, empty)
+      assert [] = Router.candidates(nil, empty, fallback: nil)
+    end
+
+    test "a configured cascade wins over the fallback" do
+      config = %{cascade: ["anthropic"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Anthropic, _, _}] = Router.candidates(nil, config, fallback: "zai")
+    end
+
+    test "an unusable fallback is reported by skipped/2" do
+      System.delete_env("ZAI_API_KEY")
+      empty = %{cascade: [], default_models: %{}, model_routing: []}
+
+      assert [] = Router.candidates(nil, empty, fallback: "zai")
+
+      assert [%{provider: "zai", reason: :no_credentials}] =
+               Router.skipped(empty, fallback: "zai")
     end
   end
 end

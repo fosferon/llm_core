@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- **Breaking:** llm_core no longer ships a native provider cascade. The hardcoded
+  default (`appliance -> zai -> anthropic`, default models including a retired
+  Anthropic id, and a `"gpt" -> openai` model-routing pattern) is removed from code
+  and from the bundled config. The `[native]` TOML section was never actually read
+  before; it is now loaded from the merged config layers (hot-reloadable), with
+  `config :llm_core, :native, ...` still taking precedence as an explicit override.
+- With no `[native]` cascade configured, the Native loop uses the single provider
+  named by `[routing] default`. If that is unset or cannot run the native loop
+  (CLI providers cannot), the call fails with a structured
+  `{:no_native_provider, %{reason:, fallback:, skipped:}}` error (an
+  `LlmCore.LLM.Error` whose `details` carry the same map) instead of choosing a provider.
+- Cascade members that are disabled, are CLI providers, or declare an `auth`
+  credential that does not resolve are skipped, not attempted. A model-routing target
+  that is unusable falls through to the cascade. An explicitly named provider
+  (`llm_provider:`) is unchanged.
+- When every cascade candidate fails, the error now lists every attempt
+  (`{:cascade_exhausted, %{last:, attempts:}}`; `Error.details` carries it), so a failure
+  in an early provider is no longer masked by the last one. A single candidate still
+  surfaces its raw error.
+- `LlmCore.LLM.Native.capabilities/0` derives `models` from the configured
+  `[native.default_models]` instead of a hardcoded list.
+
+### Migration
+
+- If you relied on the shipped cascade, add it to your project or home layer:
+
+      [native]
+      cascade = ["<your local provider>", "<your cloud provider>"]
+
+      [native.default_models]
+      <provider> = "<model id>"
+
+- Otherwise set `[routing] default` to a provider that can run the native loop.
+
 ## 0.7.0 — 2026-10-06
 
 ### Changed

@@ -125,7 +125,7 @@ defmodule LlmCore.LLM.NativeTest do
                Native.try_cascade(candidates, run)
     end
 
-    test "returns last error when every candidate fails" do
+    test "every candidate failing returns every attempt, not just the last error" do
       run = fn
         {Mod1, _, _} -> {:error, :timeout}
         {Mod2, _, _} -> {:error, :auth_failed}
@@ -133,7 +133,15 @@ defmodule LlmCore.LLM.NativeTest do
 
       candidates = [{Mod1, "m1", []}, {Mod2, "m2", []}]
 
-      assert {:error, :auth_failed} = Native.try_cascade(candidates, run)
+      assert {:error,
+              {:cascade_exhausted,
+               %{
+                 last: :auth_failed,
+                 attempts: [
+                   %{provider: Mod1, reason: :timeout},
+                   %{provider: Mod2, reason: :auth_failed}
+                 ]
+               }}} = Native.try_cascade(candidates, run)
     end
 
     test ":max_iterations_reached stops cascade immediately" do
@@ -179,6 +187,37 @@ defmodule LlmCore.LLM.NativeTest do
     test "single candidate failure surfaces the raw error" do
       run = fn _ -> {:error, :econnrefused} end
       assert {:error, :econnrefused} = Native.try_cascade([{Mod1, "m1", []}], run)
+    end
+  end
+
+  describe "build_send_result/2 structured resolution errors" do
+    test "cascade_exhausted names every attempt so the first failure is visible" do
+      details = %{
+        last: :auth_failed,
+        attempts: [%{provider: Mod1, reason: :timeout}, %{provider: Mod2, reason: :auth_failed}]
+      }
+
+      assert {:error, %LlmCore.LLM.Error{message: message, details: ^details}} =
+               Native.build_send_result({:error, {:cascade_exhausted, details}}, 5)
+
+      assert message =~ "Mod1"
+      assert message =~ ":timeout"
+      assert message =~ ":auth_failed"
+    end
+
+    test "no_native_provider explains what to configure and what was skipped" do
+      details = %{
+        reason: :cascade_unusable,
+        fallback: nil,
+        skipped: [%{provider: "x", reason: :no_credentials}]
+      }
+
+      assert {:error, %LlmCore.LLM.Error{message: message, details: ^details}} =
+               Native.build_send_result({:error, {:no_native_provider, details}}, 5)
+
+      assert message =~ "[native] cascade"
+      assert message =~ "[routing] default"
+      assert message =~ "x (no_credentials)"
     end
   end
 end

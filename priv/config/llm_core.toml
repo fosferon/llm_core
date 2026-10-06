@@ -416,40 +416,27 @@ cost_tier = "cli"
 
 # ── Native Provider Cascade ──────────────────────────────────
 #
-# The ordered list of providers tried when dispatching an in-process
-# agentic loop. First available wins.
+# llm_core ships NO native cascade, default models, or model routing: which
+# providers a deployment runs, and in what order, is its own decision.
 #
-# Change this when subscriptions change, local hardware changes,
-# or you want to prioritize a different provider.
-
-[native]
-cascade = ["appliance", "zai", "anthropic"]
-
-[native.default_models]
-appliance = "qwen3.5-27b-claude-4.6-opus-distilled-mlx"
-zai = "glm-5.1"
-anthropic = "claude-sonnet-4-6"
-
-# When a model name contains these substrings, route to the named provider.
-# Evaluated in order; first match wins. Applies when model is specified
-# but not found on the appliance.
-
-[[native.model_routing]]
-pattern = "claude"
-provider = "anthropic"
-
-[[native.model_routing]]
-pattern = "glm"
-provider = "zai"
-
-[[native.model_routing]]
-pattern = "zai"
-provider = "zai"
-
-[[native.model_routing]]
-pattern = "gpt"
-provider = "openai"
-
-[[native.model_routing]]
-pattern = "openai"
-provider = "openai"
+# With no [native] cascade configured, the in-process agentic loop uses the
+# single provider named by [routing] default. If that is unset or cannot run
+# the native loop (CLI providers cannot), the call fails with a structured
+# error — it never guesses.
+#
+# To configure a cascade, add this to your project or home layer
+# (providers are tried in order; disabled, CLI-kind and credential-less
+# providers are skipped, and a failed call lists every attempt):
+#
+# [native]
+# cascade = ["my_local", "my_cloud"]
+#
+# [native.default_models]
+# my_cloud = "some-model-id"
+#
+# # When a model name contains the substring, route to the named provider.
+# # Evaluated in order; first match wins; an unusable target falls through
+# # to the cascade.
+# [[native.model_routing]]
+# pattern = "some-substring"
+# provider = "my_cloud"

@@ -314,7 +314,7 @@ See the [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) for 
 | OpenAI | API | `LlmCore.LLM.OpenAI` | Streaming, tool use, vision, structured output |
 | Ollama | Local | `LlmCore.LLM.Ollama` | Streaming, JSON mode, local models |
 | Appliance | Local | `LlmCore.LLM.Appliance` | OpenAI-compatible local endpoints |
-| Native | API | `LlmCore.LLM.Native` | In-process agentic loop with cascade fallback |
+| Native | API | `LlmCore.LLM.Native` | In-process agentic loop; providers come from your `[native] cascade`, else `[routing] default` |
 | Claude Code | CLI | Config-driven | `--print`, system prompt file, auto-approve |
 | Droid | CLI | Config-driven | `exec` subcommand, `--auto`, `--cwd` |
 | Pi CLI | CLI | Config-driven | `--print`, `--provider`, `--thinking` |
