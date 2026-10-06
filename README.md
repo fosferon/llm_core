@@ -27,7 +27,7 @@ Add `llm_core` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:llm_core, "~> 0.6"}
+    {:llm_core, "~> 0.7"}
   ]
 end
 ```
@@ -181,6 +181,9 @@ LlmCore uses layered TOML configuration. Later sources override earlier ones:
 
 ### Minimal configuration
 
+`[routing] default` is required: llm_core ships none, and routing fails with
+`{:error, {:no_routing_default, _}}` if no config layer sets one.
+
 ```toml
 [routing]
 default = "claude"
@@ -275,7 +278,7 @@ LlmCore is built on [ALF](https://github.com/antonmi/alf) (Antonmi's Flow-based 
 Three ALF pipelines handle the core flows:
 
 - **Inference Pipeline** — normalize request → resolve route → check capabilities → dispatch provider → apply structured output → emit telemetry
-- **Routing Pipeline** — parse task type → load routing config → match rules → resolve agent or apply fallback
+- **Routing Pipeline** — parse task type → load routing config → match rules → resolve agent, or fail with `:no_routing_default`
 - **Memory Pipeline** — route operation (retain/recall/reflect) → circuit breaker gate → retry with backoff → update cache
 
 See the [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) for pipeline internals, provider behaviour contracts, and the agent loop design.
@@ -290,6 +293,7 @@ See the [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) for 
 # Router decisions
 [:llm_core, :router, :resolve, :start | :stop]
 [:llm_core, :router, :fallback]
+[:llm_core, :routing, :error]   # unconditional (not sampled); %{reason, detail, task_type, caller_ref}
 
 # Agent loop
 [:llm_core, :agent, :complete]

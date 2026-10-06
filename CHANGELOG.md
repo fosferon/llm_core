@@ -2,12 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.7.0 — 2026-10-06
+
+### Changed
+
+- **Breaking:** the bundled base config (`priv/config/llm_core.toml`) no
+  longer ships `[routing] default`, and no provider alias is hardcoded in
+  library code. Resolution with no default in any layer returns
+  `{:error, {:no_routing_default, %{task_type:, table_source:}}}` instead of
+  silently routing to an arbitrary provider. `table_source` is `:provided`,
+  `:store` or `:config_layers`.
+- `RoutingTable.default` is `nil` when no config supplies one; code that
+  pattern-matches `table.default.alias` must handle `nil`.
+- `Loader.reload_routing/1` and the Router boot path build the fallback table
+  from the merged config layers (`Loader.routing_from_layers/1`). A
+  `routing.yml` that omits `default` keeps the layered default; its explicit
+  task rules still win. The Router logs a warning when no default is found.
+- `mix llm_core.config.validate` and `config.show` report a missing default
+  instead of crashing or printing `nil`.
+
+### Added
+
+- `[:llm_core, :routing, :error]` telemetry event, emitted unconditionally
+  (not subject to span sampling) on any routing failure, with metadata
+  `%{reason, detail, task_type, caller_ref}`. `reason` is the error tag as an
+  atom (`:unknown` for untagged errors). Pass an opaque `:caller_ref` (e.g. a
+  job or execution id) via `Router.resolve/2`, `RoutingPipeline.route/2` or the
+  send/stream opts to correlate.
+
+### Migration
+
+- Add `[routing]` / `default = "<your-alias>"` to `.llm_core/llm_core.toml` or
+  `~/.llm_core/config/llm_core.toml`.
+- A `routing.yml` in the project config dir still overrides TOML routing.
+- `Router.resolve/1` is now `resolve/2` (arity-compatible); callers must handle
+  `{:error, {:no_routing_default, _}}`.
+
 ## 0.6.3 — 2026-09-23
 
 ### Fixed
 
 - `LlmCore.Agent.Loop` no longer accepts an empty stop response (no tool
-  calls, blank content) as successful completion (GC-5523). Some
+  calls, blank content) as successful completion. Some
   OpenAI-compatible backends (observed on Ollama `gpt-oss:120b`)
   occasionally return HTTP success with
   `finish_reason: "stop"`, empty content, and no tool calls while a

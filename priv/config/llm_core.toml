@@ -1,7 +1,8 @@
 # Base llm_core configuration
 
 [routing]
-default = "claude"
+# No default is shipped: consumers set `default` in their project or home layer.
+# With none anywhere, routing fails loudly ({:error, {:no_routing_default, _}}).
 
 [routing.tasks.coding]
 alias = "openai"

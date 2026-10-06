@@ -74,7 +74,7 @@ match_rules ←── Priority-ordered rule evaluation
      ↓
 ┌─[switch]────────────────────────────────────┐
 │  {:ok, route} → resolve_agent               │
-│  {:error, _}  → apply_fallback              │
+│  {:error, _}  → :no_routing_default / error │
 └─────────────────────────────────────────────┘
      ↓
 build_resolved_route ←── ResolvedRoute.t()
@@ -242,6 +242,7 @@ provider registry, and memory pipelines react immediately.
 [:llm_core, :router, :resolve, :start]
 [:llm_core, :router, :resolve, :stop]
 [:llm_core, :router, :fallback]
+[:llm_core, :routing, :error]   # unconditional (not sampled); %{reason, detail, task_type, caller_ref}
 
 # Hindsight events
 [:llm_core, :hindsight, :retain]

@@ -48,7 +48,13 @@ defmodule Mix.Tasks.LlmCore.Config.Validate do
 
     case LlmCore.Config.Store.get_routing() do
       {:ok, table} ->
-        IO.puts("\nRouting default: #{table.default.alias}")
+        default =
+          case table.default do
+            nil -> "(none - set [routing] default; routing fails with :no_routing_default)"
+            entry -> entry.alias
+          end
+
+        IO.puts("\nRouting default: #{default}")
 
         Enum.each(table.rules, fn {task, entry} ->
           IO.puts("  #{task} => #{entry.alias} (#{entry.mode})")

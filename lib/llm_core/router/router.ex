@@ -8,7 +8,9 @@ defmodule LlmCore.Router do
 
   ## Configuration
 
-  Routing rules are defined in TOML under `[routing]`:
+  Routing rules are defined in TOML under `[routing]`. `default` is required in
+  your project or home layer: llm_core ships none. Without it, task types that
+  match no rule return `{:error, {:no_routing_default, %{task_type:, table_source:}}}`.
 
       [routing]
       default = "claude"
@@ -25,6 +27,9 @@ defmodule LlmCore.Router do
       route.alias #=> "openai"
       route.mode #=> :passthrough
 
+      # Correlate routing failures with a job/execution via telemetry
+      LlmCore.Router.resolve(:coding, caller_ref: job_id)
+
       # Send a prompt through routing
       {:ok, response} = LlmCore.Router.send("Write a function", :coding)
 
@@ -40,7 +45,7 @@ defmodule LlmCore.Router do
   use GenServer
   require Logger
 
-  alias LlmCore.Config.Store
+  alias LlmCore.Config.{Loader, Store}
   alias LlmCore.Pipelines.{InferencePipeline, RoutingPipeline}
   alias LlmCore.Router.{ResolvedRoute, RoutingTable}
 
@@ -69,8 +74,9 @@ defmodule LlmCore.Router do
           table
 
         {:error, :not_found} ->
-          Logger.warning("No routing config found, using safe default")
-          default_routing_table()
+          {:ok, table} = Loader.routing_from_layers()
+          warn_if_no_default(table)
+          table
       end
 
     {:noreply, %{state | routing_table: table, last_sync: DateTime.utc_now()}}
@@ -93,11 +99,14 @@ defmodule LlmCore.Router do
   @doc """
   Resolves a task type (e.g., "coding", "planning") to a full agent config.
   """
-  @spec resolve(String.t() | atom()) :: {:ok, ResolvedRoute.t()} | {:error, term()}
-  def resolve(task_type) when is_atom(task_type), do: resolve(Atom.to_string(task_type))
+  @spec resolve(String.t() | atom(), keyword()) :: {:ok, ResolvedRoute.t()} | {:error, term()}
+  def resolve(task_type, opts \\ [])
 
-  def resolve(task_type) when is_binary(task_type),
-    do: GenServer.call(__MODULE__, {:resolve, task_type})
+  def resolve(task_type, opts) when is_atom(task_type),
+    do: resolve(Atom.to_string(task_type), opts)
+
+  def resolve(task_type, opts) when is_binary(task_type),
+    do: GenServer.call(__MODULE__, {:resolve, task_type, Keyword.take(opts, [:caller_ref])})
 
   @doc """
   Resolves a task type using a provided routing table (used for execution snapshots).
@@ -164,8 +173,8 @@ defmodule LlmCore.Router do
   end
 
   @impl true
-  def handle_call({:resolve, task_type}, _from, state) do
-    result = RoutingPipeline.route(task_type, routing_table: state.routing_table)
+  def handle_call({:resolve, task_type, opts}, _from, state) do
+    result = RoutingPipeline.route(task_type, [routing_table: state.routing_table] ++ opts)
     {:reply, result, state}
   end
 
@@ -178,7 +187,12 @@ defmodule LlmCore.Router do
     {:noreply, state, {:continue, :load_routing}}
   end
 
-  defp default_routing_table do
-    RoutingTable.new(%{"default" => "claude"})
+  defp warn_if_no_default(%RoutingTable{default: nil}) do
+    Logger.warning(
+      "No routing config in Store and no [routing] default in any config layer; " <>
+        "dispatch will fail with :no_routing_default until one is configured"
+    )
   end
+
+  defp warn_if_no_default(%RoutingTable{}), do: :ok
 end

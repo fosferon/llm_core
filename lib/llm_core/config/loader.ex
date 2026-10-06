@@ -23,6 +23,7 @@ defmodule LlmCore.Config.Loader do
 
     * `reload_providers/1` — Full TOML load + provider normalization + store update
     * `reload_routing/1` — Load and apply routing rules only
+    * `routing_from_layers/1` — Build a routing table from the merged layers (no store mutation)
     * `load_config/1` — Read merged TOML without mutating runtime state
   """
 
@@ -58,15 +59,21 @@ defmodule LlmCore.Config.Loader do
   Loads the routing configuration and writes it to the runtime store.
   Broadcasts change notifications so dependent processes can refresh.
 
+  A `routing.yml` that omits `default` inherits the default from the merged
+  config layers; its explicit task rules win.
+
   When `routing.yml` is missing, the existing Store routing is preserved
   (e.g. a table already installed from TOML via `reload_providers/1`). Only
-  when the Store has no routing at all does the safe `default => claude`
-  fallback get installed.
+  when the Store has no routing at all is the table built from the merged
+  config layers (`routing_from_layers/1`); no provider alias is ever
+  hardcoded, so with no default in any layer the table has none and routing
+  fails with `:no_routing_default`.
   """
   @spec reload_routing(keyword()) :: {:ok, RoutingTable.t()} | {:error, term()}
   def reload_routing(opts \\ []) do
     case load_routing(opts) do
       {:ok, table} ->
+        table = fill_default_from_layers(table)
         :ok = Store.put_routing(table)
         dispatch_reload(:routing)
         {:ok, table}
@@ -79,7 +86,7 @@ defmodule LlmCore.Config.Loader do
             {:ok, existing}
 
           {:error, :not_found} ->
-            table = RoutingTable.new(%{"default" => "claude"})
+            {:ok, table} = routing_from_layers()
             :ok = Store.put_routing(table)
             dispatch_reload(:routing)
             {:ok, table}
@@ -87,6 +94,30 @@ defmodule LlmCore.Config.Loader do
 
       error ->
         error
+    end
+  end
+
+  @doc """
+  Builds a routing table from the merged TOML layers (bundled base, home,
+  project, `LLM_CORE_CONFIG`, `:path`) without mutating the store.
+
+  Always returns `{:ok, table}`. The table's `default` is `nil` when no layer
+  supplies `[routing] default`, or when the routing section is invalid.
+  """
+  @spec routing_from_layers(keyword()) :: {:ok, RoutingTable.t()}
+  def routing_from_layers(opts \\ []) do
+    {:ok, config} = load_config(opts)
+
+    with %{} = routing <- Map.get(config, "routing"),
+         {:ok, table} <- routing_from_toml(routing) do
+      {:ok, table}
+    else
+      {:error, reason} ->
+        Logger.warning("Invalid routing config in TOML: #{inspect(reason)}")
+        {:ok, RoutingTable.new(%{})}
+
+      _ ->
+        {:ok, RoutingTable.new(%{})}
     end
   end
 
@@ -110,9 +141,16 @@ defmodule LlmCore.Config.Loader do
     end
   end
 
-  defp build_routing_table(nil) do
-    {:ok, RoutingTable.new(%{"default" => "claude"})}
+  # A routing.yml that omits `default` keeps the layered default; its explicit
+  # task rules still win. Never invents an alias: nil stays nil.
+  defp fill_default_from_layers(%RoutingTable{default: nil} = table) do
+    {:ok, layered} = routing_from_layers()
+    %{table | default: layered.default}
   end
+
+  defp fill_default_from_layers(table), do: table
+
+  defp build_routing_table(nil), do: {:ok, RoutingTable.new(%{})}
 
   defp build_routing_table(%{} = yaml) do
     {:ok, RoutingTable.new(yaml)}

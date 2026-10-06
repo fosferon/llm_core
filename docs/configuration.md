@@ -15,6 +15,12 @@ earlier ones):
 5. **Custom** — explicit `:path` option passed to the loader
 6. **Runtime overrides** — CLI/session overrides stored in ETS (e.g. Hindsight)
 
+The bundled base sets no `[routing] default`. Set one in the project or home
+layer; with none anywhere, routing returns `{:error, {:no_routing_default, _}}`.
+A `routing.yml` in the project config dir takes precedence over TOML routing
+(its `default:` counts as the default; if it omits one, the layered default is
+kept).
+
 The project root defaults to `File.cwd!()` but can be set via `LLM_CORE_PROJECT_ROOT`.
 The project config directory can be overridden entirely with `LLM_CORE_PROJECT_CONFIG`.
 
@@ -36,6 +42,8 @@ api_key_env = "ANTHROPIC_API_KEY"
 discover_env = ["LLM_CORE_ANTHROPIC", "DEV_ANYSCALE"]
 
 [routing]
+# Required in your project or home layer: the bundled base ships no default,
+# and routing fails with :no_routing_default when no layer sets one.
 default = "claude"
 
 [routing.tasks.coding]
