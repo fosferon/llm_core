@@ -9,6 +9,11 @@ defmodule LlmCore.Config.LoaderCLITest do
       start_supervised!(Store)
     end
 
+    on_exit(fn ->
+      LlmCore.Memory.Config.clear_runtime_override()
+      LlmCore.Memory.Hindsight.Config.clear_runtime_override()
+    end)
+
     :ok
   end
 

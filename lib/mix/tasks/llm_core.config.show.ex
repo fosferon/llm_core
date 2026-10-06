@@ -145,7 +145,8 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
   end
 
   defp print_section(:routing, payload) do
-    Mix.shell().info("Default: #{inspect(payload.default)}")
+    default = if payload.default, do: inspect(payload.default), else: "(none configured)"
+    Mix.shell().info("Default: #{default}")
 
     Enum.each(payload.rules, fn {task, entry} ->
       Mix.shell().info("  #{task} => #{inspect(entry)}")

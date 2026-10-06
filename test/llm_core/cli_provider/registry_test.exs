@@ -13,6 +13,13 @@ defmodule LlmCore.CLIProvider.RegistryTest do
     # Since @builtins is empty, CLI providers come from priv/config/llm_core.toml.
     Loader.reload_providers([])
 
+    # reload_providers persists the memory config as a runtime override; don't
+    # leak it into later tests (e.g. an env-driven Hindsight URL).
+    on_exit(fn ->
+      LlmCore.Memory.Config.clear_runtime_override()
+      LlmCore.Memory.Hindsight.Config.clear_runtime_override()
+    end)
+
     :ok
   end
 

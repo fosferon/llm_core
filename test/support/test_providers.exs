@@ -25,7 +25,7 @@ defmodule LlmCore.TestProviders.Basic do
   def send(prompt, opts \\ []) do
     content =
       if Keyword.has_key?(opts, :response_format) do
-        ~s({"echo":"#{render(prompt)}"})
+        Jason.encode!(%{"echo" => render(prompt)})
       else
         render(prompt)
       end

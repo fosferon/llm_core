@@ -107,7 +107,7 @@ defmodule LlmCore.Pipelines.InferencePipeline do
   def resolve_route(%Context{result: {:error, _}} = ctx, _opts), do: ctx
 
   def resolve_route(%Context{task_type: task_type, opts: opts} = ctx, _opts) do
-    routing_opts = Keyword.take(opts, [:routing_table])
+    routing_opts = Keyword.take(opts, [:routing_table, :caller_ref])
 
     case RoutingPipeline.route(task_type, routing_opts) do
       {:ok, %ResolvedRoute{} = route} -> %{ctx | route: route, agent: route.agent}

@@ -88,7 +88,7 @@ defmodule LlmCore.Router.RoutingTable do
   alias LlmCore.Router.RouteEntry
 
   @type t :: %__MODULE__{
-          default: RouteEntry.t(),
+          default: RouteEntry.t() | nil,
           rules: %{optional(String.t()) => RouteEntry.t()},
           loaded_at: DateTime.t()
         }
@@ -96,13 +96,17 @@ defmodule LlmCore.Router.RoutingTable do
   @enforce_keys [:default]
   defstruct [:default, rules: %{}, loaded_at: nil]
 
+  @doc """
+  Builds a table from a config map. `default` is `nil` when the config supplies
+  none: no provider alias is ever invented here. Resolution against a
+  table without a default fails with `{:no_routing_default, _}`.
+  """
   @spec new(map()) :: t()
   def new(map) when is_map(map) do
     default =
       map
       |> Map.get("default")
       |> RouteEntry.from_config()
-      |> default_or_fallback()
 
     rules =
       map
@@ -116,9 +120,6 @@ defmodule LlmCore.Router.RoutingTable do
 
     %__MODULE__{default: default, rules: rules, loaded_at: DateTime.utc_now()}
   end
-
-  defp default_or_fallback(nil), do: %RouteEntry{alias: "claude", mode: :abstracted}
-  defp default_or_fallback(entry), do: entry
 end
 
 defmodule LlmCore.Router.ResolvedRoute do

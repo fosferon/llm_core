@@ -7,11 +7,18 @@ defmodule LlmCore.Memory.Hindsight.WriteBufferTest do
     old_env = System.get_env("HINDSIGHT_API_KEY")
     old_url = System.get_env("HINDSIGHT_URL")
 
+    # Runtime overrides leaked by other modules (reload_providers persists the
+    # env URL as an override) beat HINDSIGHT_URL; start from a clean slate.
+    LlmCore.Memory.Config.clear_runtime_override()
+    LlmCore.Memory.Hindsight.Config.clear_runtime_override()
+
     ensure_started(WriteBuffer)
     WriteBuffer.clear_buffer()
 
     on_exit(fn ->
       WriteBuffer.clear_buffer()
+      LlmCore.Memory.Config.clear_runtime_override()
+      LlmCore.Memory.Hindsight.Config.clear_runtime_override()
 
       if old_env do
         System.put_env("HINDSIGHT_API_KEY", old_env)

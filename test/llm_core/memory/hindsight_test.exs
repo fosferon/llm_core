@@ -114,6 +114,11 @@ defmodule LlmCore.Memory.HindsightTest do
   describe "bank management with :api_key opt" do
     setup do
       old_env = System.get_env("HINDSIGHT_API_KEY")
+      old_url = System.get_env("HINDSIGHT_URL")
+
+      # Overrides left by earlier reload_providers calls would beat the env URL.
+      LlmCore.Memory.Config.clear_runtime_override()
+      LlmCore.Memory.Hindsight.Config.clear_runtime_override()
 
       on_exit(fn ->
         if old_env do
@@ -121,6 +126,17 @@ defmodule LlmCore.Memory.HindsightTest do
         else
           System.delete_env("HINDSIGHT_API_KEY")
         end
+
+        # These tests point HINDSIGHT_URL at a throwaway echo server; leaking it
+        # makes later reload_providers calls persist a dead URL as a runtime override.
+        if old_url do
+          System.put_env("HINDSIGHT_URL", old_url)
+        else
+          System.delete_env("HINDSIGHT_URL")
+        end
+
+        LlmCore.Memory.Config.clear_runtime_override()
+        LlmCore.Memory.Hindsight.Config.clear_runtime_override()
       end)
 
       :ok

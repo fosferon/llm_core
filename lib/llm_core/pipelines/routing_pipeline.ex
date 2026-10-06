@@ -6,6 +6,7 @@ defmodule LlmCore.Pipelines.RoutingPipeline.Context do
   defstruct task_type: nil,
             opts: [],
             routing_table: nil,
+            table_source: nil,
             route_entry: nil,
             agent: nil,
             result: nil
@@ -50,11 +51,36 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
     ensure_started()
     context = %Context{task_type: task_type, opts: opts}
 
-    Telemetry.span(:routing_pipeline, %{task_type: task_type}, fn ->
-      result = Manager.call(context, __MODULE__, sync: true)
-      {result, telemetry_result(result)}
-    end)
+    result =
+      Telemetry.span(:routing_pipeline, %{task_type: task_type}, fn ->
+        result = Manager.call(context, __MODULE__, sync: true)
+        {result, telemetry_result(result)}
+      end)
+
+    emit_routing_error(result, task_type, opts)
+    result
   end
+
+  # Unconditional (not subject to span sampling): a routing failure must always
+  # be observable, with the caller's opaque :caller_ref for correlation.
+  defp emit_routing_error({:error, reason}, task_type, opts) do
+    {tag, detail} =
+      case reason do
+        {tag, %{} = detail} when is_atom(tag) -> {tag, detail}
+        {tag, detail} when is_atom(tag) -> {tag, %{detail: detail}}
+        tag when is_atom(tag) -> {tag, %{}}
+        other -> {:unknown, %{detail: other}}
+      end
+
+    :telemetry.execute([:llm_core, :routing, :error], %{}, %{
+      reason: tag,
+      detail: detail,
+      task_type: task_type,
+      caller_ref: Keyword.get(opts, :caller_ref)
+    })
+  end
+
+  defp emit_routing_error(_result, _task_type, _opts), do: :ok
 
   # --- Stage callbacks ----------------------------------------------------
 
@@ -78,23 +104,20 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
   def load_routing_table(%Context{opts: opts} = ctx, _opts) do
     routing_table_opt = Keyword.get(opts, :routing_table)
 
-    routing_table =
-      cond do
-        match?(%RoutingTable{}, routing_table_opt) -> routing_table_opt
-        true -> fetch_table_from_store()
+    {routing_table, source} =
+      case routing_table_opt do
+        %RoutingTable{} = table -> {table, :provided}
+        _ -> fetch_table_from_store()
       end
 
-    %{ctx | routing_table: routing_table}
+    %{ctx | routing_table: routing_table, table_source: source}
   end
 
   defp fetch_table_from_store do
-    routing_table =
-      case Store.get_routing() do
-        {:ok, table} -> table
-        {:error, :not_found} -> ensure_table_from_disk()
-      end
-
-    routing_table
+    case Store.get_routing() do
+      {:ok, table} -> {table, :store}
+      {:error, :not_found} -> {ensure_table_from_disk(), :config_layers}
+    end
   end
 
   @doc false
@@ -103,12 +126,23 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
         %Context{routing_table: %RoutingTable{} = table, task_type: task} = ctx,
         _opts
       ) do
-    entry = Map.get(table.rules, task, table.default)
-    %{ctx | route_entry: entry}
+    case Map.get(table.rules, task, table.default) do
+      nil ->
+        %{
+          ctx
+          | result:
+              {:error, {:no_routing_default, %{task_type: task, table_source: ctx.table_source}}}
+        }
+
+      entry ->
+        %{ctx | route_entry: entry}
+    end
   end
 
   @doc false
   @spec load_agent(Context.t(), keyword()) :: Context.t()
+  def load_agent(%Context{result: {:error, _}} = ctx, _opts), do: ctx
+
   def load_agent(%Context{route_entry: %RouteEntry{alias: alias}} = ctx, _opts) do
     case Registry.get(alias) do
       {:ok, agent} ->
@@ -202,7 +236,7 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
   defp ensure_table_from_disk do
     case Loader.reload_routing() do
       {:ok, table} -> table
-      {:error, _} -> RoutingTable.new(%{"default" => "kimi"})
+      {:error, _} -> RoutingTable.new(%{})
     end
   end
 

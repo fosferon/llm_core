@@ -28,7 +28,7 @@ defmodule LlmCore.Config.LoaderTest do
     assert {:error, :not_found} = Loader.load_routing(path: temp_path("missing.yml"))
   end
 
-  test "reload_routing stores fallback when file missing" do
+  test "reload_routing stores a layered table when file missing" do
     assert {:ok, %RoutingTable{} = table} = Loader.reload_routing(path: temp_path("missing.yml"))
     assert %RoutingTable{} = table
     assert {:ok, ^table} = Store.get_routing()
@@ -310,7 +310,7 @@ defmodule LlmCore.Config.LoaderTest do
       # TOML [routing.tasks.*] and writes to Store) is called first, then
       # reload_routing is called. If routing.yml is missing (as it is for any
       # TOML-only consumer), reload_routing must NOT overwrite the Store with
-      # the "default => claude" fallback.
+      # a fallback table.
       config_path = temp_path("llm_core-gc758-routing.toml")
 
       File.write!(
@@ -358,16 +358,34 @@ defmodule LlmCore.Config.LoaderTest do
       assert routing_after_reload.rules["help_draft"].mode == :passthrough
     end
 
-    test "reload_routing still installs fallback when Store has no routing at all" do
-      # Edge case: if nothing has written routing to the Store yet (no TOML
-      # with [routing], no prior load), reload_routing with a missing YAML
-      # should still install the safe default so the Router has something
-      # to resolve against.
+    test "reload_routing with an empty Store installs the layered table" do
+      # Nothing has written routing to the Store yet. reload_routing builds the
+      # table from the merged config layers; no provider alias is hardcoded.
+      # Layers are isolated so the host's ~/.llm_core cannot leak in.
+      home = temp_dir("gc6006-home")
+      project = temp_dir("gc6006-project")
+      File.mkdir_p!(project)
+      File.write!(Path.join(project, "llm_core.toml"), ~s|[routing]\ndefault = "layered"\n|)
+
+      old = for k <- ["LLM_CORE_HOME", "LLM_CORE_PROJECT_CONFIG"], do: {k, System.get_env(k)}
+      System.put_env("LLM_CORE_HOME", home)
+      System.put_env("LLM_CORE_PROJECT_CONFIG", project)
+
+      on_exit(fn ->
+        Enum.each(old, fn
+          {k, nil} -> System.delete_env(k)
+          {k, v} -> System.put_env(k, v)
+        end)
+
+        File.rm_rf(home)
+        File.rm_rf(project)
+      end)
+
       :ets.delete(:llm_core_config, {:config, :routing})
 
       missing_yml = temp_path("missing-gc758-fallback.yml")
       assert {:ok, %RoutingTable{} = table} = Loader.reload_routing(path: missing_yml)
-      assert table.default.alias == "kimi"
+      assert table.default.alias == "layered"
       assert {:ok, ^table} = Store.get_routing()
     end
   end
