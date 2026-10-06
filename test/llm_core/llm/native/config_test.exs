@@ -21,6 +21,8 @@ defmodule LlmCore.LLM.Native.ConfigTest do
     unless Process.whereis(Store), do: start_supervised!(Store)
 
     saved_native = Application.get_env(:llm_core, :native)
+    saved = for k <- [:raw, :providers], do: {k, Store.fetch(:config, k)}
+    saved_routing = Store.get_routing()
     Application.delete_env(:llm_core, :native)
     Store.put(:config, :raw, %{})
 
@@ -28,6 +30,16 @@ defmodule LlmCore.LLM.Native.ConfigTest do
       case saved_native do
         nil -> Application.delete_env(:llm_core, :native)
         v -> Application.put_env(:llm_core, :native, v)
+      end
+
+      Enum.each(saved, fn
+        {k, {:ok, v}} -> Store.put(:config, k, v)
+        {k, _} -> :ets.delete(:llm_core_config, {:config, k})
+      end)
+
+      case saved_routing do
+        {:ok, table} -> Store.put_routing(table)
+        _ -> :ets.delete(:llm_core_config, {:config, :routing})
       end
     end)
 
@@ -60,6 +72,21 @@ defmodule LlmCore.LLM.Native.ConfigTest do
       Application.put_env(:llm_core, :native, %{cascade: ["from_env"]})
 
       assert %{cascade: ["from_env"]} = Config.get()
+    end
+
+    test "a keyword app env with a stray non-tuple entry does not raise" do
+      Application.put_env(:llm_core, :native, [{:cascade, ["a"]}, :oops])
+      assert %{cascade: ["a"]} = Config.get()
+    end
+
+    test "reads as empty — not an exception — when the config store is not running" do
+      :ets.delete(:llm_core_config, {:config, :raw})
+      assert %{cascade: []} = Config.get()
+      assert %{streaming: false, native_loop: true} = Native.capabilities()
+    end
+
+    test "capabilities/0 advertises no hardcoded model list" do
+      refute Map.has_key?(Native.capabilities(), :models)
     end
 
     test "normalizes atom or string keys and drops malformed routing entries" do
@@ -199,6 +226,30 @@ defmodule LlmCore.LLM.Native.ConfigTest do
 
       assert {:error, %LlmCore.LLM.Error{details: %{reason: :cascade_unusable}}} =
                Native.send("hello", cwd: cwd)
+    end
+  end
+
+  describe "Native.send does not probe an appliance nobody configured" do
+    setup do
+      cwd = tmp_dir("cwd2")
+      on_exit(fn -> File.rm_rf(cwd) end)
+
+      Store.put(:config, :providers, %{
+        "fake" => %Definition{
+          id: "fake",
+          module: LlmCore.TestProviders.Basic,
+          aliases: ["fake"],
+          default_model: "fake-model"
+        }
+      })
+
+      :ok = Store.put_routing(RoutingTable.new(%{"default" => "fake"}))
+      {:ok, cwd: cwd}
+    end
+
+    test "a model id is used as given with no Appliance provider in play", %{cwd: cwd} do
+      assert {:ok, response} = Native.send("hello", cwd: cwd, model: "some-model")
+      assert response.metadata.model == "some-model"
     end
   end
 

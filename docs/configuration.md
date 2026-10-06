@@ -55,12 +55,13 @@ capabilities = { structured_output = true, tool_use = true }
 # Optional. llm_core ships no native cascade: providers are tried in this order,
 # skipping any that are disabled, cannot run the native loop (CLI providers), or
 # have no credential. With no cascade, the single provider named by
-# [routing] default is used; if that is unusable the call fails with a
-# structured error naming why — it never picks a provider on its own.
+# [routing] default is used. With neither, the call returns an error whose
+# Error.details are %{reason:, fallback:, skipped:} — it never picks a provider
+# from a built-in list.
 cascade = ["anthropic", "openai"]
 
 [native.default_models]
-anthropic = "claude-3-sonnet"
+anthropic = "<model id>"
 
 [[native.model_routing]]   # substring of the model id -> provider; first match wins
 pattern = "gpt"

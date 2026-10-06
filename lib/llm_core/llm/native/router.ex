@@ -8,8 +8,13 @@ defmodule LlmCore.LLM.Native.Router do
 
   ## Resolution Logic
 
+    0. If the caller reports the requested model is loaded on the local Appliance
+       (`appliance_has_model: true`) **and** an Appliance-module provider is listed in the
+       cascade (or is the fallback), that provider is used. With no Appliance provider
+       configured the flag has no effect.
     1. Explicit provider (`llm_provider: "my_provider"`) → look up Definition by name/alias
-    2. Model routing (`model` matches a pattern) → look up Definition for matched provider
+    2. Model routing (`model` matches a pattern) → look up Definition for matched provider;
+       an unusable target falls through to the cascade
     3. Cascade → walk the configured `[native]cascade` list, find the first usable provider
        Definition. With no cascade configured, the `:fallback` option (the routing default,
        passed by the caller) is the only member.
@@ -47,28 +52,16 @@ defmodule LlmCore.LLM.Native.Router do
 
   def resolve(model, config, opts) when is_binary(model) do
     lower = String.downcase(model)
-    appliance_has_model = Keyword.get(opts, :appliance_has_model, false)
-
     providers = fetch_providers()
-
     config = with_fallback_cascade(config, Keyword.get(opts, :fallback))
 
-    # 1. Local appliance wins if the model is loaded there (free)
-    if appliance_has_model do
-      {:ok, {LlmCore.LLM.Appliance, model, []}}
+    # 1. A configured local appliance wins if the model is loaded there (free). The flag
+    #    is ignored unless an Appliance provider is in the cascade/fallback.
+    with true <- Keyword.get(opts, :appliance_has_model, false),
+         {:ok, _} = local <- appliance_candidate(config, model, providers) do
+      local
     else
-      # 2. Try model routing patterns; an unusable target falls through to the cascade
-      case route_model(lower, config) do
-        {:ok, provider_alias} ->
-          case lookup_provider(provider_alias, model, providers) do
-            {:ok, _} = ok -> ok
-            {:error, _} -> cascade_pick(config, model, providers)
-          end
-
-        :no_match ->
-          # 3. Walk cascade with the given model
-          cascade_pick(config, model, providers)
-      end
+      _ -> resolve_by_routing(lower, model, config, providers)
     end
   end
 
@@ -165,6 +158,50 @@ defmodule LlmCore.LLM.Native.Router do
 
   defp with_fallback_cascade(config, _fallback), do: config
 
+  # 2. Model routing patterns; an unusable target falls through to the cascade.
+  defp resolve_by_routing(lower, model, config, providers) do
+    case route_model(lower, config) do
+      {:ok, provider_alias} ->
+        case lookup_provider(provider_alias, model, providers) do
+          {:ok, _} = ok -> ok
+          {:error, _} -> cascade_pick(config, model, providers)
+        end
+
+      :no_match ->
+        # 3. Walk the cascade with the given model
+        cascade_pick(config, model, providers)
+    end
+  end
+
+  @doc """
+  The alias of the first usable cascade member (or fallback) backed by the local
+  `LlmCore.LLM.Appliance` module, or `nil`.
+
+  Callers use it to decide whether probing the appliance for a loaded model is
+  worthwhile at all: with no Appliance provider configured, nothing is probed.
+  """
+  @spec appliance_alias(config(), keyword()) :: String.t() | nil
+  def appliance_alias(config, opts \\ []) do
+    config = with_fallback_cascade(config, Keyword.get(opts, :fallback))
+    providers = fetch_providers()
+
+    Enum.find(Map.get(config, :cascade, []), fn alias ->
+      appliance_member?(alias, providers) and
+        match?({:ok, _}, lookup_provider(alias, nil, providers))
+    end)
+  end
+
+  defp appliance_candidate(config, model, providers) do
+    case Enum.find(Map.get(config, :cascade, []), &appliance_member?(&1, providers)) do
+      nil -> {:error, :no_appliance}
+      alias -> lookup_provider(alias, model, providers)
+    end
+  end
+
+  defp appliance_member?(alias, providers) do
+    match?(%Definition{module: LlmCore.LLM.Appliance}, find_definition(alias, providers))
+  end
+
   # ── Model Routing ─────────────────────────────────────────
 
   @doc "Match a lowercased model string against routing patterns. First match wins."
@@ -234,15 +271,20 @@ defmodule LlmCore.LLM.Native.Router do
   defp usable(%Definition{provider_kind: :cli}, :strict), do: {:error, :not_native}
 
   defp usable(%Definition{auth: auth}, :strict) do
-    if credential_required?(auth) and blank?(resolve_api_key(auth)),
-      do: {:error, :no_credentials},
-      else: :ok
+    if credential_missing?(auth), do: {:error, :no_credentials}, else: :ok
   end
 
-  defp credential_required?(%{} = auth),
-    do: Map.has_key?(auth, "api_key_env") or Map.has_key?(auth, "api_key")
+  # The config loader records the verdict in `"api_key_present"` (env set, inline key, or
+  # discovered env; true when the provider declares no auth at all). Trust it when present;
+  # hand-built definitions without it fall back to resolving the declared key directly.
+  defp credential_missing?(%{"api_key_present" => present}), do: present != true
 
-  defp credential_required?(_), do: false
+  defp credential_missing?(%{} = auth) do
+    (Map.has_key?(auth, "api_key_env") or Map.has_key?(auth, "api_key")) and
+      blank?(resolve_api_key(auth))
+  end
+
+  defp credential_missing?(_), do: false
 
   defp blank?(nil), do: true
   defp blank?(""), do: true

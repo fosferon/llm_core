@@ -23,7 +23,9 @@ defmodule LlmCore.LLM.Native.Config do
   `{:no_native_provider, details}` error instead of choosing a provider.
 
   Precedence: `config :llm_core, :native, ...` (explicit Elixir app env) beats
-  the merged TOML layers. Layers are re-read on every config reload.
+  the merged TOML layers. The override replaces the **whole** `[native]` section;
+  keys are not merged. The configuration is read on every call, so a config reload
+  takes effect immediately; with the config store not running it reads as empty.
   """
 
   alias LlmCore.Config.Store
@@ -38,9 +40,14 @@ defmodule LlmCore.LLM.Native.Config do
   @spec get() :: t()
   def get do
     case Application.get_env(:llm_core, :native) do
-      env when is_map(env) and map_size(env) > 0 -> normalize(env)
-      env when is_list(env) and env != [] -> normalize(Map.new(env))
-      _ -> from_layers()
+      env when is_map(env) and map_size(env) > 0 ->
+        normalize(env)
+
+      env when is_list(env) and env != [] ->
+        normalize(env |> Enum.filter(&match?({_, _}, &1)) |> Map.new())
+
+      _ ->
+        from_layers()
     end
   end
 
@@ -59,6 +66,9 @@ defmodule LlmCore.LLM.Native.Config do
       {:ok, %{"native" => %{} = native}} -> normalize(native)
       _ -> normalize(%{})
     end
+  rescue
+    # The config store's table does not exist (llm_core not started): nothing configured.
+    ArgumentError -> normalize(%{})
   end
 
   defp fetch(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))

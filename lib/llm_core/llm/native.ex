@@ -56,8 +56,7 @@ defmodule LlmCore.LLM.Native do
       streaming: false,
       passthrough: false,
       tool_use: true,
-      native_loop: true,
-      models: NativeConfig.get().default_models |> Map.values() |> Enum.sort()
+      native_loop: true
     }
   end
 
@@ -297,13 +296,13 @@ defmodule LlmCore.LLM.Native do
 
   # ── Provider Resolution ────────────────────────────────────
   #
-  # Driven by TOML config ([native] section in priv/config/llm_core.toml).
+  # Driven by the merged [native] config (`LlmCore.LLM.Native.Config`); llm_core ships none.
   #
-  # Cascade: ordered list of providers to try. First available wins.
+  # Cascade: ordered list of providers to try. First usable wins.
   # Model routing: substring patterns → provider name. First match wins.
   # Default models: per-provider fallback when no model specified.
   #
-  # All of this is configurable — change the TOML, not the code.
+  # All of this is configurable — change the config, not the code.
 
   # Returns `{:ok, candidates}` — an ordered list of `{mod, model, opts}` — or a
   # structured `{:error, {:no_native_provider, details}}` saying why nothing is usable.
@@ -328,8 +327,10 @@ defmodule LlmCore.LLM.Native do
     fallback = routing_default_alias()
     router_opts = [fallback: fallback]
 
+    # Only probe the local appliance when an Appliance provider is actually configured.
     appliance_has =
-      is_binary(model) and appliance_available?() and model_available_on_appliance?(model)
+      is_binary(model) and Router.appliance_alias(config, router_opts) != nil and
+        appliance_available?() and model_available_on_appliance?(model)
 
     case Router.candidates(model, config, [appliance_has_model: appliance_has] ++ router_opts) do
       [] -> {:error, {:no_native_provider, no_provider_details(config, fallback, router_opts)}}
