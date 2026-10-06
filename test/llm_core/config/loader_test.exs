@@ -367,7 +367,7 @@ defmodule LlmCore.Config.LoaderTest do
 
       missing_yml = temp_path("missing-gc758-fallback.yml")
       assert {:ok, %RoutingTable{} = table} = Loader.reload_routing(path: missing_yml)
-      assert table.default.alias == "claude"
+      assert table.default.alias == "kimi"
       assert {:ok, ^table} = Store.get_routing()
     end
   end

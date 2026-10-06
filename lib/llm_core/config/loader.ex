@@ -79,7 +79,7 @@ defmodule LlmCore.Config.Loader do
             {:ok, existing}
 
           {:error, :not_found} ->
-            table = RoutingTable.new(%{"default" => "claude"})
+            table = RoutingTable.new(%{"default" => "kimi"})
             :ok = Store.put_routing(table)
             dispatch_reload(:routing)
             {:ok, table}
@@ -111,7 +111,7 @@ defmodule LlmCore.Config.Loader do
   end
 
   defp build_routing_table(nil) do
-    {:ok, RoutingTable.new(%{"default" => "claude"})}
+    {:ok, RoutingTable.new(%{"default" => "kimi"})}
   end
 
   defp build_routing_table(%{} = yaml) do

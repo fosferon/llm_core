@@ -202,7 +202,7 @@ defmodule LlmCore.Pipelines.RoutingPipeline do
   defp ensure_table_from_disk do
     case Loader.reload_routing() do
       {:ok, table} -> table
-      {:error, _} -> RoutingTable.new(%{"default" => "claude"})
+      {:error, _} -> RoutingTable.new(%{"default" => "kimi"})
     end
   end
 

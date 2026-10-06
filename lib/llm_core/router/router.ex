@@ -179,6 +179,6 @@ defmodule LlmCore.Router do
   end
 
   defp default_routing_table do
-    RoutingTable.new(%{"default" => "claude"})
+    RoutingTable.new(%{"default" => "kimi"})
   end
 end
