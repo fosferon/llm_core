@@ -295,6 +295,11 @@ defmodule LlmCore.LLM.Anthropic do
       |> maybe_put(:prompt_tokens, get_in(body, ["usage", "input_tokens"]))
       |> maybe_put(:completion_tokens, get_in(body, ["usage", "output_tokens"]))
       |> maybe_put(:total_tokens, total_tokens(body))
+      # Anthropic prompt-caching usage (cache reads billed ~0.1x input, writes
+      # 1.25x) — surfaced so callers can measure hit rates and true input cost
+      # (gc_daemon#3).
+      |> maybe_put(:cached_tokens, get_in(body, ["usage", "cache_read_input_tokens"]))
+      |> maybe_put(:cache_creation_input_tokens, get_in(body, ["usage", "cache_creation_input_tokens"]))
 
     tool_calls =
       if stop_reason == "tool_use" do

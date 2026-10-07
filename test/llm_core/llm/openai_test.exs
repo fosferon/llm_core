@@ -36,13 +36,48 @@ defmodule LlmCore.LLM.OpenAITest do
              ]
     end
 
+    test "surfaces prompt_tokens_details.cached_tokens in the final usage event" do
+      # OpenAI-compatible providers (OpenAI, z.ai, Kimi, DeepSeek) report
+      # prompt-cache hits here; cached_tokens is a subset of prompt_tokens.
+      chunk = """
+      data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8437,\"completion_tokens\":28,\"total_tokens\":8465,\"prompt_tokens_details\":{\"cached_tokens\":8384}}}
+
+      data: [DONE]
+      """
+
+      assert {events, true, true} = OpenAI.decode_stream_chunk(chunk)
+
+      assert events == [
+               {:usage,
+                %{
+                  prompt_tokens: 8437,
+                  completion_tokens: 28,
+                  total_tokens: 8465,
+                  cached_tokens: 8384
+                }}
+             ]
+    end
+
+    test "usage without prompt_tokens_details omits cached_tokens" do
+      chunk = """
+      data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":5,\"total_tokens\":12}}
+
+      data: [DONE]
+      """
+
+      assert {events, true, true} = OpenAI.decode_stream_chunk(chunk)
+
+      assert events == [
+               {:usage, %{prompt_tokens: 7, completion_tokens: 5, total_tokens: 12}}
+             ]
+    end
+
     test "emits empty usage when the stream ends without provider usage" do
       chunk = """
       data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}
 
       data: [DONE]
       """
-
       assert {["Hi", {:usage, %{}}], true, false} = OpenAI.decode_stream_chunk(chunk)
     end
 
