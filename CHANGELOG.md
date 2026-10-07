@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.8.1 — 2026-10-07
+
+### Fixed
+
+- A native cascade made of OpenAI-compatible providers (several `[providers.*]` entries
+  that share `LlmCore.LLM.OpenAI` and differ only by `base_url` and key — e.g. DeepSeek,
+  Z.ai and OpenRouter) collapsed to a single candidate, so failover to the later members
+  never happened. Candidates are now de-duplicated by backend identity (module plus
+  provider options) instead of by module alone: distinct backends stay distinct cascade
+  members, in order, while two aliases for the very same backend still collapse to one.
+  Cascades whose members use different modules were unaffected.
+
 ## 0.8.0 — 2026-10-07
 
 ### Changed

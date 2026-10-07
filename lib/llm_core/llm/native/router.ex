@@ -110,20 +110,23 @@ defmodule LlmCore.LLM.Native.Router do
     end
   end
 
-  defp fallback_candidates({primary_mod, _, _}, config) do
+  # A backend's identity is its module *and* its provider options (base_url, api_key):
+  # deepseek, zai and openrouter are all the same OpenAI-compatible module and must stay
+  # distinct cascade members, while two aliases for the very same backend collapse to one.
+  defp fallback_candidates({primary_mod, _, primary_opts}, config) do
     providers = fetch_providers()
     cascade = Map.get(config, :cascade, [])
 
     cascade
     |> Enum.reduce([], fn alias, acc ->
       case lookup_provider(alias, nil, providers) do
-        {:ok, {^primary_mod, _, _}} -> acc
+        {:ok, {^primary_mod, _, ^primary_opts}} -> acc
         {:ok, candidate} -> [candidate | acc]
         {:error, _} -> acc
       end
     end)
     |> Enum.reverse()
-    |> Enum.uniq_by(fn {mod, _, _} -> mod end)
+    |> Enum.uniq_by(fn {mod, _model, opts} -> {mod, opts} end)
   end
 
   @doc """

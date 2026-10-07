@@ -504,4 +504,68 @@ defmodule LlmCore.LLM.Native.RouterTest do
                Router.skipped(empty, fallback: "zai")
     end
   end
+
+  describe "providers that share a module are distinct backends" do
+    # deepseek, zai and openrouter are all LlmCore.LLM.OpenAI with different base_url/key.
+    defp same_module(id, base_url, key) do
+      %Definition{
+        id: id,
+        module: LlmCore.LLM.OpenAI,
+        aliases: [id],
+        default_model: "m-#{id}",
+        options: %{"base_url" => base_url},
+        auth: %{"api_key_env" => nil, "api_key_present" => true, "api_key" => key}
+      }
+    end
+
+    setup do
+      Store.put(:config, :providers, %{
+        "ds" => same_module("ds", "https://api.ds.example", "k-ds"),
+        "z" => same_module("z", "https://api.z.example", "k-z"),
+        "or" => same_module("or", "https://api.or.example", "k-or"),
+        "or_again" => same_module("or_again", "https://api.or.example", "k-or")
+      })
+
+      :ok
+    end
+
+    test "a cascade of OpenAI-compatible providers keeps every member, in order" do
+      config = %{cascade: ["ds", "z", "or"], default_models: %{}, model_routing: []}
+
+      assert [
+               {LlmCore.LLM.OpenAI, "m-ds", ds_opts},
+               {LlmCore.LLM.OpenAI, "m-z", z_opts},
+               {LlmCore.LLM.OpenAI, "m-or", or_opts}
+             ] = Router.candidates(nil, config)
+
+      assert Keyword.get(ds_opts, :base_url) == "https://api.ds.example"
+      assert Keyword.get(z_opts, :base_url) == "https://api.z.example"
+      assert Keyword.get(or_opts, :base_url) == "https://api.or.example"
+    end
+
+    test "two aliases for the very same backend still collapse to one" do
+      config = %{cascade: ["or", "or_again"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.OpenAI, "m-or", _}] = Router.candidates(nil, config)
+    end
+
+    test "the same alias listed twice appears once" do
+      config = %{cascade: ["ds", "z", "ds"], default_models: %{}, model_routing: []}
+
+      assert [{_, "m-ds", _}, {_, "m-z", _}] = Router.candidates(nil, config)
+    end
+
+    test "a model-routed primary is not repeated, but the other same-module members follow" do
+      config = %{
+        cascade: ["ds", "z", "or"],
+        default_models: %{},
+        model_routing: [%{"pattern" => "special", "provider" => "z"}]
+      }
+
+      assert [{_, "special-model", z_opts}, {_, "m-ds", _}, {_, "m-or", _}] =
+               Router.candidates("special-model", config)
+
+      assert Keyword.get(z_opts, :base_url) == "https://api.z.example"
+    end
+  end
 end
