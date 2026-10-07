@@ -27,7 +27,7 @@ Add `llm_core` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:llm_core, "~> 0.7"}
+    {:llm_core, "~> 0.8"}
   ]
 end
 ```
