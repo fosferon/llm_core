@@ -3,17 +3,20 @@ defmodule LlmCore.LLM.Native do
   In-process agentic provider — runs the agent loop inside the BEAM VM.
 
     1. Reads the agent .md system prompt
-    2. Resolves an LLM API provider (Appliance → Zai → Anthropic)
+    2. Resolves an LLM API provider from configuration
     3. Calls LlmCore.Agent.Loop.run with LlmToolkit.CodeTools
     4. Returns a standard LlmCore.LLM.Response
 
-  Zero CLI cost. Uses whatever API provider is available.
+  Zero CLI cost. Uses whatever API provider your configuration makes available.
 
-  ## Provider Resolution Priority
+  ## Provider Resolution
 
-    1. **Appliance** (local, free) — Qwen, etc. on DGX Spark / LM Studio
-    2. **Z.ai** (plan-covered) — GLM-5.1, included in coding plan
-    3. **Anthropic** (direct API) — Claude models, pay-per-token
+  llm_core ships no provider order. Configure a `[native] cascade` (see
+  `LlmCore.LLM.Native.Config`); providers are tried in that order, skipping any that
+  are disabled, cannot run the native loop, or have no credential. With no cascade
+  configured, the single provider named by `[routing] default` is used. If nothing is
+  usable the call fails with a structured `{:no_native_provider, details}` error; if
+  every candidate fails, the error lists every attempt.
 
   ## Usage
 
@@ -24,13 +27,15 @@ defmodule LlmCore.LLM.Native do
       {:ok, response} = LlmCore.LLM.Native.send(task,
         system_prompt_file: "/path/to/agent.md",
         cwd: "/path/to/project",
-        model: "qwen3-vl-32b-thinking"
+        model: "my-model-id"
       )
   """
 
   @behaviour LlmCore.LLM.Provider
 
+  alias LlmCore.Config.Store
   alias LlmCore.LLM.{Response, Error}
+  alias LlmCore.LLM.Native.Config, as: NativeConfig
   alias LlmCore.LLM.Native.Router
 
   alias LlmCore.Agent.Loop
@@ -51,8 +56,7 @@ defmodule LlmCore.LLM.Native do
       streaming: false,
       passthrough: false,
       tool_use: true,
-      native_loop: true,
-      models: ["qwen3-vl-32b-thinking", "glm-5.1", "claude-sonnet-4-6"]
+      native_loop: true
     }
   end
 
@@ -128,12 +132,50 @@ defmodule LlmCore.LLM.Native do
      )}
   end
 
+  def build_send_result(
+        {:error, {:cascade_exhausted, %{last: last, attempts: attempts} = details}},
+        _elapsed
+      ) do
+    tried =
+      Enum.map_join(attempts, "; ", fn %{provider: mod, reason: reason} ->
+        "#{inspect(mod)}: #{inspect(reason)}"
+      end)
+
+    {:error,
+     Error.new(:provider_error,
+       message:
+         "Native dispatch error: #{inspect(last)} " <>
+           "(every cascade provider failed — #{tried})",
+       provider: :native,
+       details: details
+     )}
+  end
+
+  def build_send_result({:error, {:no_native_provider, %{reason: reason} = details}}, _elapsed) do
+    {:error,
+     Error.new(:provider_error,
+       message:
+         "No native provider is usable (#{reason}): configure [native] cascade, " <>
+           "or set [routing] default to a provider that can run the native loop" <>
+           skipped_note(Map.get(details, :skipped, [])),
+       provider: :native,
+       details: details
+     )}
+  end
+
   def build_send_result({:error, reason}, _elapsed) do
     {:error,
      Error.new(:provider_error,
        message: "Native dispatch error: #{inspect(reason)}",
        provider: :native
      )}
+  end
+
+  defp skipped_note([]), do: ""
+
+  defp skipped_note(skipped) do
+    " — skipped: " <>
+      Enum.map_join(skipped, ", ", fn %{provider: p, reason: r} -> "#{p} (#{r})" end)
   end
 
   @impl true
@@ -151,28 +193,29 @@ defmodule LlmCore.LLM.Native do
 
   defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider) do
     system_prompt = load_agent_prompt(agent_file)
-    candidates = resolve_candidates(model, llm_provider)
 
-    messages = [
-      %{role: :system, content: system_prompt},
-      %{role: :user, content: prompt}
-    ]
+    with {:ok, candidates} <- resolve_candidates(model, llm_provider) do
+      messages = [
+        %{role: :system, content: system_prompt},
+        %{role: :user, content: prompt}
+      ]
 
-    tools = CodeTools.available_tools()
+      tools = CodeTools.available_tools()
 
-    run_fn = fn {provider, resolved_model, provider_opts} ->
-      llm_send = build_llm_send(provider, resolved_model, provider_opts)
+      run_fn = fn {provider, resolved_model, provider_opts} ->
+        llm_send = build_llm_send(provider, resolved_model, provider_opts)
 
-      Loop.run(
-        messages,
-        llm_send,
-        tools: tools,
-        resolve_tool: &CodeTools.resolve(&1, cwd),
-        max_iterations: @max_iterations
-      )
+        Loop.run(
+          messages,
+          llm_send,
+          tools: tools,
+          resolve_tool: &CodeTools.resolve(&1, cwd),
+          max_iterations: @max_iterations
+        )
+      end
+
+      try_cascade(candidates, run_fn)
     end
-
-    try_cascade(candidates, run_fn)
   end
 
   @doc """
@@ -185,6 +228,10 @@ defmodule LlmCore.LLM.Native do
   - Any other `{:error, reason}` (including the typed `{:empty_stop, _}` —
     provider-specific degenerate output may not repeat on another backend)
     → logs and advances to the next candidate.
+  - Every candidate failed: a single candidate surfaces its raw error; several
+    return `{:error, {:cascade_exhausted, %{last: reason, attempts: attempts}}}`
+    where `attempts` lists every candidate's `%{provider: module, reason: term}` in order,
+    so the first failure is never masked by the last one.
   - Empty list → `{:error, :no_provider_succeeded}`.
 
   Exposed for direct testing; production call sites go through `send/2`.
@@ -193,7 +240,11 @@ defmodule LlmCore.LLM.Native do
           {:ok, LlmCore.LLM.Response.t(), [map()]} | {:error, term()}
   def try_cascade([], _run_fn), do: {:error, :no_provider_succeeded}
 
-  def try_cascade([candidate | rest], run_fn) do
+  def try_cascade(candidates, run_fn), do: walk_cascade(candidates, run_fn, [])
+
+  defp walk_cascade([candidate | rest], run_fn, attempts) do
+    {mod, _, _} = candidate
+
     case run_fn.(candidate) do
       {:ok, _response, _messages} = ok ->
         ok
@@ -201,18 +252,20 @@ defmodule LlmCore.LLM.Native do
       {:error, :max_iterations_reached} = err ->
         err
 
-      {:error, _reason} = err when rest == [] ->
-        err
+      {:error, reason} when rest == [] ->
+        case [%{provider: mod, reason: reason} | attempts] do
+          [_single] -> {:error, reason}
+          all -> {:error, {:cascade_exhausted, %{last: reason, attempts: Enum.reverse(all)}}}
+        end
 
       {:error, reason} ->
-        {mod, _, _} = candidate
         require Logger
 
         Logger.warning(
           "[Native] Provider #{inspect(mod)} failed (#{inspect(reason)}); trying next in cascade"
         )
 
-        try_cascade(rest, run_fn)
+        walk_cascade(rest, run_fn, [%{provider: mod, reason: reason} | attempts])
     end
   end
 
@@ -243,23 +296,26 @@ defmodule LlmCore.LLM.Native do
 
   # ── Provider Resolution ────────────────────────────────────
   #
-  # Driven by TOML config ([native] section in priv/config/llm_core.toml).
+  # Driven by the merged [native] config (`LlmCore.LLM.Native.Config`); llm_core ships none.
   #
-  # Cascade: ordered list of providers to try. First available wins.
+  # Cascade: ordered list of providers to try. First usable wins.
   # Model routing: substring patterns → provider name. First match wins.
   # Default models: per-provider fallback when no model specified.
   #
-  # All of this is configurable — change the TOML, not the code.
+  # All of this is configurable — change the config, not the code.
 
-  # Returns an ordered list of `{mod, model, opts}` candidates.
+  # Returns `{:ok, candidates}` — an ordered list of `{mod, model, opts}` — or a
+  # structured `{:error, {:no_native_provider, details}}` saying why nothing is usable.
   #
   # Explicit `llm_provider` → single-element list (caller asked for a specific
   # backend; don't silently cascade to a different one).
-  # Otherwise → primary + remaining cascade fallbacks from `Router.candidates/3`.
+  # Otherwise → primary + remaining cascade members from `Router.candidates/3`.
+  # The cascade comes from `[native]` config (`LlmCore.LLM.Native.Config`); with
+  # none configured the only member is the routing default.
   defp resolve_candidates(model, llm_provider) when is_binary(llm_provider) do
     case Router.resolve_provider(llm_provider) do
       {:ok, {mod, resolved_model, opts}} ->
-        [{mod, model || resolved_model, opts}]
+        {:ok, [{mod, model || resolved_model, opts}]}
 
       {:error, :no_provider} ->
         raise "unknown LLM provider: #{llm_provider}"
@@ -267,41 +323,38 @@ defmodule LlmCore.LLM.Native do
   end
 
   defp resolve_candidates(model, nil) do
-    config = read_native_config()
+    config = NativeConfig.get()
+    fallback = routing_default_alias()
+    router_opts = [fallback: fallback]
 
+    # Only probe the local appliance when an Appliance provider is actually configured.
     appliance_has =
-      is_binary(model) and appliance_available?() and model_available_on_appliance?(model)
+      is_binary(model) and Router.appliance_alias(config, router_opts) != nil and
+        appliance_available?() and model_available_on_appliance?(model)
 
-    case Router.candidates(model, config, appliance_has_model: appliance_has) do
-      [] ->
-        raise "no LLM API provider available — check [native] cascade in llm_core.toml"
-
-      candidates ->
-        candidates
+    case Router.candidates(model, config, [appliance_has_model: appliance_has] ++ router_opts) do
+      [] -> {:error, {:no_native_provider, no_provider_details(config, fallback, router_opts)}}
+      candidates -> {:ok, candidates}
     end
   end
 
-  # Read [native] config from Application env (loaded from TOML at startup).
-  defp read_native_config do
-    Application.get_env(:llm_core, :native, default_native_config())
+  defp no_provider_details(config, fallback, router_opts) do
+    reason =
+      cond do
+        config.cascade != [] -> :cascade_unusable
+        is_nil(fallback) -> :no_routing_default
+        true -> :fallback_unusable
+      end
+
+    %{reason: reason, fallback: fallback, skipped: Router.skipped(config, router_opts)}
   end
 
-  defp default_native_config do
-    %{
-      cascade: ["appliance", "zai", "anthropic"],
-      default_models: %{
-        "appliance" => "qwen3.5-27b-claude-4.6-opus-distilled-mlx",
-        "zai" => "glm-5.1",
-        "anthropic" => "claude-sonnet-4-6"
-      },
-      model_routing: [
-        %{"pattern" => "claude", "provider" => "anthropic"},
-        %{"pattern" => "glm", "provider" => "zai"},
-        %{"pattern" => "zai", "provider" => "zai"},
-        %{"pattern" => "gpt", "provider" => "openai"},
-        %{"pattern" => "openai", "provider" => "openai"}
-      ]
-    }
+  # The routing default is the fallback provider when no native cascade is configured.
+  defp routing_default_alias do
+    case Store.get_routing() do
+      {:ok, %{default: %{alias: alias}}} when is_binary(alias) -> alias
+      _ -> nil
+    end
   end
 
   defp appliance_available?, do: LlmCore.LLM.Appliance.available?()

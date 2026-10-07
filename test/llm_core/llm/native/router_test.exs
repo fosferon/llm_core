@@ -60,7 +60,28 @@ defmodule LlmCore.LLM.Native.RouterTest do
       start_supervised!(Store)
     end
 
+    saved_providers = Store.fetch(:config, :providers)
     Store.put(:config, :providers, @providers)
+
+    on_exit(fn ->
+      case saved_providers do
+        {:ok, v} -> Store.put(:config, :providers, v)
+        _ -> :ets.delete(:llm_core_config, {:config, :providers})
+      end
+    end)
+
+    # Providers declaring an auth credential are only usable when it resolves.
+    keys = ["ZAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+    saved = for k <- keys, do: {k, System.get_env(k)}
+    Enum.each(keys, &System.put_env(&1, "test-key"))
+
+    on_exit(fn ->
+      Enum.each(saved, fn
+        {k, nil} -> System.delete_env(k)
+        {k, v} -> System.put_env(k, v)
+      end)
+    end)
+
     :ok
   end
 
@@ -315,6 +336,172 @@ defmodule LlmCore.LLM.Native.RouterTest do
 
       assert {:ok, {LlmCore.LLM.OpenAI, "mistral-large", _}} =
                Router.resolve("mistral-large", config, appliance_has_model: false)
+    end
+  end
+
+  describe "credentials as the config loader reports them" do
+    # Config.Loader.normalize_auth always writes "api_key_env" (nil when unset) and records
+    # the verdict in "api_key_present"; hand-built maps hid that local providers were dropped.
+    defp loader_def(id, module, auth),
+      do: %Definition{id: id, module: module, aliases: [id], default_model: "m-#{id}", auth: auth}
+
+    test "a provider with no credential requirement (api_key_env nil, present) is usable" do
+      local =
+        loader_def("local", LlmCore.LLM.Appliance, %{
+          "api_key_env" => nil,
+          "api_key_present" => true
+        })
+
+      Store.put(:config, :providers, %{"local" => local})
+      config = %{cascade: ["local"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Appliance, "m-local", _}] = Router.candidates(nil, config)
+      assert [] = Router.skipped(config)
+    end
+
+    test "api_key_present false means the credential is missing, whatever the env says" do
+      System.put_env("ZAI_API_KEY", "set-but-loader-said-no")
+
+      cloud =
+        loader_def("cloud", LlmCore.LLM.Zai, %{
+          "api_key_env" => "ZAI_API_KEY",
+          "api_key_present" => false
+        })
+
+      Store.put(:config, :providers, %{"cloud" => cloud})
+      config = %{cascade: ["cloud"], default_models: %{}, model_routing: []}
+
+      assert [] = Router.candidates(nil, config)
+      assert [%{provider: "cloud", reason: :no_credentials}] = Router.skipped(config)
+    end
+
+    test "an inline or discovered key (api_key_present true, env nil) is usable" do
+      keyed =
+        loader_def("keyed", LlmCore.LLM.Zai, %{
+          "api_key_env" => nil,
+          "api_key_present" => true,
+          "source" => :inline
+        })
+
+      Store.put(:config, :providers, %{"keyed" => keyed})
+      config = %{cascade: ["keyed"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Zai, _, _}] = Router.candidates(nil, config)
+    end
+  end
+
+  describe "the local appliance shortcut is configuration too" do
+    test "appliance_has_model is honored when an Appliance provider is in the cascade" do
+      config = %{cascade: ["zai", "appliance"], default_models: %{}, model_routing: []}
+
+      assert {:ok, {LlmCore.LLM.Appliance, "my-model", _}} =
+               Router.resolve("my-model", config, appliance_has_model: true)
+
+      assert "appliance" = Router.appliance_alias(config)
+    end
+
+    test "appliance_has_model is ignored when no Appliance provider is configured" do
+      config = %{cascade: ["zai"], default_models: %{}, model_routing: []}
+
+      assert {:ok, {LlmCore.LLM.Zai, "my-model", _}} =
+               Router.resolve("my-model", config, appliance_has_model: true)
+
+      assert nil == Router.appliance_alias(config)
+    end
+
+    test "the fallback may itself be the appliance" do
+      empty = %{cascade: [], default_models: %{}, model_routing: []}
+
+      assert "appliance" = Router.appliance_alias(empty, fallback: "appliance")
+      assert nil == Router.appliance_alias(empty)
+    end
+  end
+
+  describe "usability: skipped candidates and the fallback provider" do
+    test "a cascade member whose credential is unset is skipped, not attempted" do
+      System.delete_env("ANTHROPIC_API_KEY")
+      config = %{cascade: ["anthropic", "zai"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Zai, "glm-5.1", _}] = Router.candidates(nil, config)
+      assert [%{provider: "anthropic", reason: :no_credentials}] = Router.skipped(config)
+    end
+
+    test "a blank credential counts as unset" do
+      System.put_env("ANTHROPIC_API_KEY", "")
+      config = %{cascade: ["anthropic"], default_models: %{}, model_routing: []}
+
+      assert [] = Router.candidates(nil, config)
+      assert [%{reason: :no_credentials}] = Router.skipped(config)
+    end
+
+    test "disabled and unknown providers are skipped with a reason" do
+      providers = Map.put(@providers, "zai", %{@providers["zai"] | enabled: false})
+      Store.put(:config, :providers, providers)
+      config = %{cascade: ["zai", "ghost", "anthropic"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Anthropic, _, _}] = Router.candidates(nil, config)
+
+      assert [
+               %{provider: "zai", reason: :disabled},
+               %{provider: "ghost", reason: :no_provider}
+             ] = Router.skipped(config)
+    end
+
+    test "a CLI provider cannot run the native loop and is skipped" do
+      cli = %Definition{
+        id: "some_cli",
+        module: LlmCore.LLM.CLIProvider,
+        provider_kind: :cli,
+        aliases: ["some_cli"]
+      }
+
+      Store.put(:config, :providers, Map.put(@providers, "some_cli", cli))
+      config = %{cascade: ["some_cli", "zai"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Zai, _, _}] = Router.candidates(nil, config)
+      assert [%{provider: "some_cli", reason: :not_native}] = Router.skipped(config)
+    end
+
+    test "a model-routing target that is unusable falls through to the cascade" do
+      System.delete_env("OPENAI_API_KEY")
+
+      config = %{
+        cascade: ["zai"],
+        default_models: %{},
+        model_routing: [%{"pattern" => "gpt", "provider" => "openai"}]
+      }
+
+      assert [{LlmCore.LLM.Zai, "gpt-oss:120b", _} | _] =
+               Router.candidates("gpt-oss:120b", config)
+    end
+
+    test "an explicitly named provider is returned even without a credential" do
+      System.delete_env("ANTHROPIC_API_KEY")
+      assert {:ok, {LlmCore.LLM.Anthropic, _, _}} = Router.resolve_provider("anthropic")
+    end
+
+    test "no cascade configured: the fallback (routing default) is the only candidate" do
+      empty = %{cascade: [], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Zai, "glm-5.1", _}] = Router.candidates(nil, empty, fallback: "zai")
+      assert [] = Router.candidates(nil, empty)
+      assert [] = Router.candidates(nil, empty, fallback: nil)
+    end
+
+    test "a configured cascade wins over the fallback" do
+      config = %{cascade: ["anthropic"], default_models: %{}, model_routing: []}
+
+      assert [{LlmCore.LLM.Anthropic, _, _}] = Router.candidates(nil, config, fallback: "zai")
+    end
+
+    test "an unusable fallback is reported by skipped/2" do
+      System.delete_env("ZAI_API_KEY")
+      empty = %{cascade: [], default_models: %{}, model_routing: []}
+
+      assert [] = Router.candidates(nil, empty, fallback: "zai")
+
+      assert [%{provider: "zai", reason: :no_credentials}] =
+               Router.skipped(empty, fallback: "zai")
     end
   end
 end

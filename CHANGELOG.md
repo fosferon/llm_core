@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- **Breaking:** the native provider cascade is configuration, not code. The hardcoded
+  default (`appliance -> zai -> anthropic`, default models including a retired
+  Anthropic id, and a `"gpt" -> openai` model-routing pattern) is removed from code
+  and from the bundled config.
+- The `[native]` TOML section was dead config: nothing ever loaded it, so the
+  hardcoded default always won unless a consumer set Elixir app env. It is now read
+  from the merged config layers and reloads with them. **Any `[native]` block already
+  present in a layer, previously ignored, now takes effect: review it before
+  upgrading.** `config :llm_core, :native, ...` still takes precedence and replaces
+  the whole section (keys are not merged).
+- With no `[native]` cascade configured, the Native loop uses the single provider
+  named by `[routing] default`. If that is unset or cannot run the native loop (CLI
+  providers cannot), the call fails instead of choosing a provider. The error is an
+  `LlmCore.LLM.Error` (`provider: :native`) whose `details` is
+  `%{reason:, fallback:, skipped:}`: `reason` is `:no_routing_default`,
+  `:fallback_unusable` (the default exists but is unusable) or `:cascade_unusable`
+  (a configured cascade has no usable member); `skipped` lists
+  `%{provider:, reason:}` with reason `:no_provider`, `:disabled`, `:not_native` or
+  `:no_credentials`.
+- Cascade members that are disabled, are CLI providers, or whose credential is
+  missing (per the loader's `api_key_present`) are skipped, not attempted. A
+  model-routing target that is unusable falls through to the cascade. An explicitly
+  named provider (`llm_provider:`) is unchanged.
+- When every cascade candidate fails, the error lists every attempt
+  (`{:cascade_exhausted, %{last:, attempts:}}`, also in `Error.details`) instead of
+  surfacing only the last provider's error. A single candidate still surfaces its raw
+  error.
+- The "local appliance wins if the requested model is loaded there" shortcut applies
+  only when an Appliance provider is in the cascade or is the fallback; otherwise the
+  appliance is no longer probed.
+- `LlmCore.LLM.Native.capabilities/0` no longer advertises a hardcoded `models` list.
+
+### Added
+
+- `LlmCore.LLM.Native.Config` (reads `[native]`), `LlmCore.LLM.Native.Router.skipped/2`
+  and `LlmCore.LLM.Native.Router.appliance_alias/2`.
+
+### Migration
+
+- Bump the dependency to `{:llm_core, "~> 0.8"}`.
+- If you relied on the shipped cascade, configure it in your project or home layer:
+
+      [native]
+      cascade = ["<your local provider>", "<your cloud provider>"]
+
+      [native.default_models]
+      <provider> = "<model id>"
+
+- Otherwise set `[routing] default` to a provider that can run the native loop.
+
 ## 0.7.0 — 2026-10-06
 
 ### Changed
