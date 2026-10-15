@@ -8,8 +8,9 @@ defmodule LlmCore.Agent.Components.BudgetGuard do
   enforcement.
 
   Skips processing when the decision is already `:done` (no tool calls),
-  `:blank_stop` (degenerate empty stop — the outer loop recovers), or when
-  the pipeline is in error status.
+  `:blank_stop` / `:nonterminal_stop` (stops the outer loop recovers), when
+  the response carries the terminal tool call (the turn is complete), or
+  when the pipeline is in error status.
 
   Analogous to budget guard clauses in step-oriented loop executors:
   that check recursion depth before proceeding.
@@ -35,6 +36,14 @@ defmodule LlmCore.Agent.Components.BudgetGuard do
   def call(%Context{status: :error} = ctx, _opts), do: ctx
   def call(%Context{decision: {:done, _}} = ctx, _opts), do: ctx
   def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
+  def call(%Context{decision: {:nonterminal_stop, _}} = ctx, _opts), do: ctx
+
+  # A terminal-tool response completes the turn; its sibling calls are
+  # dispatched on this iteration and no further LLM call follows, so the
+  # iteration budget cannot be exceeded by it.
+  def call(%Context{terminal_tool_call: %{}} = ctx, _opts) do
+    %{ctx | trace: ctx.trace ++ [:budget_terminal]}
+  end
 
   def call(%Context{iteration: i, max_iterations: max} = ctx, _opts) when i >= max - 1 do
     %{

@@ -20,10 +20,17 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
   blanks repeat.
 
   When `ctx.terminal_tool` is set and a matching call is present, the
-  pipeline marks the response as done and stores the matching call and raw
-  arguments on the context. The call is not validated, dispatched, or injected
-  into the next turn. A terminal-tool completion with blank text content is
-  still `:done` — the payload travels in the tool arguments.
+  terminal call and its raw arguments are stored on the context and removed
+  from `tool_calls`; the call itself is never validated or dispatched. Any
+  sibling calls in the same response stay in `tool_calls` and flow through
+  validation and dispatch as usual — `LoopDecision` then completes the turn
+  instead of continuing. A terminal-tool completion with blank text content
+  is still complete — the payload travels in the tool arguments.
+
+  When `ctx.terminal_required` is set alongside `terminal_tool`, a response
+  with no tool calls and non-blank prose is `{:nonterminal_stop, response}`
+  rather than `{:done, response}`: the model narrated instead of finishing
+  through the terminal tool. The outer loop owns the bounded recovery.
 
   Analogous to a context merge stage: takes
   raw input and normalizes it into the pipeline's working format.
@@ -49,8 +56,10 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
       content is non-blank
     * `decision: {:blank_stop, response}` when no tool calls are present
       and the content is blank
-    * `decision: {:done, response}` plus terminal fields when the terminal
-      tool is called
+    * `terminal_tool_call` / `terminal_args` set and the terminal call removed
+      from `tool_calls` when the terminal tool is called (siblings remain)
+    * `decision: {:nonterminal_stop, response}` when `terminal_required` is
+      set and the response has prose but no tool calls
   """
   @spec call(Context.t(), keyword()) :: Context.t()
   def call(%Context{status: :error} = ctx, _opts), do: ctx
@@ -63,26 +72,43 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
             %{ctx | tool_calls: calls, trace: ctx.trace ++ [:parse_tool_calls]}
 
           terminal_call ->
+            siblings = List.delete(calls, terminal_call)
+
             %{
               ctx
-              | tool_calls: calls,
+              | tool_calls: siblings,
                 terminal_tool_call: terminal_call,
                 terminal_args: terminal_call.arguments,
-                decision: {:done, response},
                 trace: ctx.trace ++ [{:parse_terminal_tool, terminal_call.name}]
             }
         end
 
       _ ->
-        # No tool calls. Either a final text response, or a degenerate
-        # empty stop that the outer loop must recover from.
-        if blank_stop?(response) do
-          %{ctx | decision: {:blank_stop, response}, trace: ctx.trace ++ [:parse_blank_stop]}
-        else
-          %{ctx | decision: {:done, response}, trace: ctx.trace ++ [:parse_no_tools]}
+        # No tool calls. Either a final text response, a degenerate empty
+        # stop, or — under a required terminal tool — a narrated stop; the
+        # outer loop recovers the latter two.
+        cond do
+          blank_stop?(response) ->
+            %{ctx | decision: {:blank_stop, response}, trace: ctx.trace ++ [:parse_blank_stop]}
+
+          terminal_required?(ctx) ->
+            %{
+              ctx
+              | decision: {:nonterminal_stop, response},
+                trace: ctx.trace ++ [:parse_nonterminal_stop]
+            }
+
+          true ->
+            %{ctx | decision: {:done, response}, trace: ctx.trace ++ [:parse_no_tools]}
         end
     end
   end
+
+  defp terminal_required?(%Context{terminal_required: true, terminal_tool: tool})
+       when is_binary(tool),
+       do: true
+
+  defp terminal_required?(_ctx), do: false
 
   # A no-tool-call response is a blank stop when its text content is nil or
   # whitespace-only and it carries no structured output. Such a response

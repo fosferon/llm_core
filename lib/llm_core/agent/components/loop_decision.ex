@@ -31,12 +31,27 @@ defmodule LlmCore.Agent.Components.LoopDecision do
 
     Updated `%Context{}` with `decision` set to one of:
     * `{:continue, messages}` — tool calls executed, loop again
-    * `{:done, response}` — no more tool calls, return final response
+    * `{:done, response}` — no more tool calls, or the terminal tool was
+      called (after its sibling calls were dispatched); return final response
   """
   @spec call(Context.t(), keyword()) :: Context.t()
   def call(%Context{status: :error} = ctx, _opts), do: ctx
   def call(%Context{decision: {:done, _}} = ctx, _opts), do: ctx
   def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
+  def call(%Context{decision: {:nonterminal_stop, _}} = ctx, _opts), do: ctx
+
+  # The terminal tool was called: any sibling calls have been dispatched and
+  # their results injected, but no further LLM turn follows. The outer loop
+  # appends `result_messages` to the transcript and returns the response.
+  def call(%Context{terminal_tool_call: %{}, response: response} = ctx, _opts) do
+    :telemetry.execute(
+      [:llm_core, :agent, :loop_iteration],
+      %{iteration: ctx.iteration, tool_calls_count: length(ctx.tool_calls)},
+      %{terminal: true}
+    )
+
+    %{ctx | decision: {:done, response}, trace: ctx.trace ++ [:loop_terminal_done]}
+  end
 
   def call(%Context{result_messages: [_ | _] = msgs} = ctx, _opts) do
     :telemetry.execute(
