@@ -20,8 +20,10 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
   blanks repeat.
 
   When `ctx.terminal_tool` is set and a matching call is present, the
-  terminal call and its raw arguments are stored on the context and removed
-  from `tool_calls`; the call itself is never validated or dispatched. Any
+  terminal call and its raw arguments are stored on the context and every
+  call bearing the terminal name is removed from `tool_calls`; the terminal
+  call is never validated or dispatched, and duplicate copies (a provider
+  repeating the call under distinct ids) are dropped and traced. Any other
   sibling calls in the same response stay in `tool_calls` and flow through
   validation and dispatch as usual — `LoopDecision` then completes the turn
   instead of continuing. A terminal-tool completion with blank text content
@@ -72,14 +74,24 @@ defmodule LlmCore.Agent.Components.ParseToolCalls do
             %{ctx | tool_calls: calls, trace: ctx.trace ++ [:parse_tool_calls]}
 
           terminal_call ->
-            siblings = List.delete(calls, terminal_call)
+            # Every call bearing the terminal name leaves the dispatch path:
+            # the first is the terminal call, extra copies (a provider
+            # duplicating tool calls under distinct ids) are dropped and
+            # recorded in the trace — never dispatched, never a "sibling".
+            {terminal_copies, siblings} = Enum.split_with(calls, &(&1.name == ctx.terminal_tool))
+            dropped = length(terminal_copies) - 1
+
+            trace =
+              ctx.trace ++
+                [{:parse_terminal_tool, terminal_call.name}] ++
+                if(dropped > 0, do: [{:terminal_duplicates_dropped, dropped}], else: [])
 
             %{
               ctx
               | tool_calls: siblings,
                 terminal_tool_call: terminal_call,
                 terminal_args: terminal_call.arguments,
-                trace: ctx.trace ++ [{:parse_terminal_tool, terminal_call.name}]
+                trace: trace
             }
         end
 

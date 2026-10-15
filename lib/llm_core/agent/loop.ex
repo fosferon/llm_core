@@ -14,8 +14,11 @@ defmodule LlmCore.Agent.Loop do
   With `:terminal_tool` and `:terminal_required`, a no-tool-call response
   with prose (`:nonterminal_stop`) is not accepted either: the model's prose
   is appended as an assistant message, a nudge follows as a user message,
-  and the turn is retried under `:max_nonterminal_stops`. Exhaustion
-  terminates with the typed `{:terminal_missing, details}` error carrying
+  and the turn is retried. Narrated stops are budgeted per RUN
+  (`:max_nonterminal_stops`), so a model that narrates, is nudged into one
+  tool call and narrates again cannot reset the budget. Exhaustion — of that
+  budget or of the iteration budget while the terminal tool was never called
+  — terminates with the typed `{:terminal_missing, details}` error carrying
   the last prose, so the caller decides how to degrade.
 
   The loop owns iteration control and message accumulation. The pipeline
@@ -81,7 +84,8 @@ defmodule LlmCore.Agent.Loop do
 
   # Bounded recovery for narrated stops under a required terminal tool: the
   # model answered in prose without calling the terminal tool. Counted
-  # separately from blank stops; retries do not consume iterations.
+  # separately from blank stops and per RUN (not per iteration); retries do
+  # not consume iterations.
   @default_max_nonterminal_stops 3
 
   # When the same tool error repeats this many times consecutively,
@@ -122,20 +126,21 @@ defmodule LlmCore.Agent.Loop do
       * `:terminal_required` — when `true` (requires `:terminal_tool`), a
         no-tool-call response with prose does not end the loop: the prose is
         appended as an assistant message, `:terminal_nudge` follows as a user
-        message, and the turn is retried under `:max_nonterminal_stops`.
-        Exhaustion returns `{:terminal_missing, %{iteration:, attempts:,
-        last_content:, finish_reasons:, terminal_tool:, provider:, model:}}`.
-        A completion that needed retries is marked
-        `response.metadata.terminal_recovery_attempts`.
+        message, and the turn is retried. Narrated stops are budgeted per run
+        by `:max_nonterminal_stops`. Exhausting that budget, or the iteration
+        budget before the terminal tool is called, returns
+        `{:terminal_missing, %{iteration:, attempts:, last_content:,
+        finish_reasons:, terminal_tool:, provider:, model:}}` (the iteration
+        case adds `reason: :max_iterations`). A completion that needed retries
+        is marked `response.metadata.terminal_recovery_attempts`.
       * `:terminal_nudge` — user-message text for the non-terminal retry.
         Defaults to a sentence naming the terminal tool.
       * `:terminal_content_key` — argument name of the terminal call whose
         string value becomes `response.content` (the model's own prose, if
         any, is kept under `response.metadata.terminal_prose`). A blank or
         missing argument leaves the content untouched.
-      * `:max_nonterminal_stops` — max consecutive narrated stops tolerated
-        per iteration under `:terminal_required`
-        (default: #{@default_max_nonterminal_stops}).
+      * `:max_nonterminal_stops` — max narrated stops tolerated per run
+        under `:terminal_required` (default: #{@default_max_nonterminal_stops}).
       * `:max_blank_stops` — max consecutive blank-stop responses tolerated
         per iteration before the typed `{:empty_stop, details}` error
         (default: #{@default_max_blank_stops}). Blank-stop retries do not
@@ -201,7 +206,12 @@ defmodule LlmCore.Agent.Loop do
       on_iteration: on_iteration,
       total_tool_calls: 0,
       last_error: nil,
-      error_repeat_count: 0
+      error_repeat_count: 0,
+      # Narrated-stop budget is per RUN: a model that narrates, is nudged
+      # into one tool call, then narrates again must not reset it.
+      nonterminal_total: 0,
+      last_narrated: nil,
+      iteration: 0
     }
 
     result =
@@ -214,8 +224,8 @@ defmodule LlmCore.Agent.Loop do
           {:done, response, final_messages, total_tool_calls} ->
             {:halt, {:ok, response, final_messages, iteration + 1, total_tool_calls}}
 
-          {:error, reason} ->
-            {:halt, {:error, reason}}
+          {:error, reason, state} ->
+            {:halt, {:error, reason, state}}
         end
       end)
 
@@ -224,27 +234,51 @@ defmodule LlmCore.Agent.Loop do
         emit_complete(total_iterations, total_tool_calls)
         {:ok, response, final_messages}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, reason, state} ->
+        {:error, terminalize_exhaustion(reason, state)}
 
       {:ok, state} ->
         emit_complete(max_iterations, state.total_tool_calls)
-        {:error, :max_iterations_reached}
+        {:error, terminalize_exhaustion(:max_iterations_reached, state)}
     end
   end
+
+  # Under a required terminal tool, running out of iterations IS "the
+  # terminal was never called": the caller gets the same typed error family
+  # (with the last narrated prose, if any) instead of a bare budget error.
+  defp terminalize_exhaustion(reason, %{terminal_required: true} = state)
+       when reason in [:budget_exceeded, :max_iterations_reached] do
+    {:terminal_missing,
+     %{
+       reason: :max_iterations,
+       iteration: state.iteration,
+       attempts: state.nonterminal_total,
+       last_content: narrated_content(state.last_narrated),
+       finish_reasons: [],
+       terminal_tool: state.terminal_tool,
+       provider: narrated_field(state.last_narrated, :provider),
+       model: narrated_field(state.last_narrated, :model)
+     }}
+  end
+
+  defp terminalize_exhaustion(reason, _state), do: reason
+
+  defp narrated_content(nil), do: nil
+  defp narrated_content(%{content: content}), do: content
+
+  defp narrated_field(nil, _key), do: nil
+  defp narrated_field(response, key), do: Map.get(response, key)
 
   # -- Private ----------------------------------------------------------------
 
   @spec do_iteration(map(), llm_send_fn(), keyword(), non_neg_integer()) ::
           {:continue, map()}
           | {:done, LlmCore.LLM.Response.t(), [map()], non_neg_integer()}
-          | {:error, term()}
+          | {:error, term(), map()}
   defp do_iteration(state, llm_send_fn, llm_opts, iteration) do
-    recover_stops(state, llm_send_fn, llm_opts, iteration, %{
+    recover_stops(%{state | iteration: iteration}, llm_send_fn, llm_opts, iteration, %{
       blank: 0,
-      nonterminal: 0,
-      finish_reasons: [],
-      last_content: nil
+      finish_reasons: []
     })
   end
 
@@ -252,15 +286,16 @@ defmodule LlmCore.Agent.Loop do
   #
   # A blank stop (no tool calls, blank content) and — under a required
   # terminal tool — a narrated stop (no tool calls, prose) each retry the
-  # same iteration without consuming the iteration budget. Each kind has
-  # its own consecutive-attempt bound; exhaustion terminates with a typed
+  # same iteration without consuming the iteration budget. Blank stops are
+  # bounded per iteration (consecutive); narrated stops are bounded per RUN
+  # (`state.nonterminal_total`). Exhaustion terminates with a typed
   # error (`{:empty_stop, details}` / `{:terminal_missing, details}`)
   # carrying bounded diagnostics: iteration number, attempt count, the
   # observed finish reasons and, for narrated stops, the last prose.
   @spec recover_stops(map(), llm_send_fn(), keyword(), non_neg_integer(), map()) ::
           {:continue, map()}
           | {:done, LlmCore.LLM.Response.t(), [map()], non_neg_integer()}
-          | {:error, term()}
+          | {:error, term(), map()}
   defp recover_stops(state, llm_send_fn, llm_opts, iteration, recovery) do
     case llm_send_fn.(state.messages, llm_opts) do
       {:ok, response} ->
@@ -289,7 +324,7 @@ defmodule LlmCore.Agent.Loop do
                   finish_reasons: recovery.finish_reasons,
                   provider: blank.provider,
                   model: blank.model
-                }}}
+                }}, state}
             else
               require Logger
 
@@ -302,20 +337,19 @@ defmodule LlmCore.Agent.Loop do
             end
 
           {:nonterminal_stop, narrated} ->
-            attempts = recovery.nonterminal + 1
+            attempts = state.nonterminal_total + 1
+            state = %{state | nonterminal_total: attempts, last_narrated: narrated}
 
             recovery = %{
               recovery
-              | nonterminal: attempts,
-                finish_reasons: recovery.finish_reasons ++ [finish_reason(narrated)],
-                last_content: narrated.content
+              | finish_reasons: recovery.finish_reasons ++ [finish_reason(narrated)]
             }
 
             if attempts >= state.max_nonterminal_stops do
               require Logger
 
               Logger.warning(
-                "[Agent.Loop] Terminal missing: #{attempts} consecutive narrated responses without #{state.terminal_tool} at iteration #{iteration} — terminating"
+                "[Agent.Loop] Terminal missing: #{attempts} narrated responses without #{state.terminal_tool} in this run (iteration #{iteration}) — terminating"
               )
 
               {:error,
@@ -328,7 +362,7 @@ defmodule LlmCore.Agent.Loop do
                   terminal_tool: state.terminal_tool,
                   provider: narrated.provider,
                   model: narrated.model
-                }}}
+                }}, state}
             else
               require Logger
 
@@ -341,14 +375,17 @@ defmodule LlmCore.Agent.Loop do
             end
 
           {:done, response, messages, tool_calls} ->
-            {:done, mark_recovery(response, recovery), messages, tool_calls}
+            {:done, mark_recovery(response, recovery, state), messages, tool_calls}
 
-          other ->
-            other
+          {:continue, _state} = continue ->
+            continue
+
+          {:error, reason} ->
+            {:error, reason, state}
         end
 
       {:error, reason} ->
-        {:error, {:llm_error, reason}}
+        {:error, {:llm_error, reason}, state}
     end
   end
 
@@ -565,9 +602,9 @@ defmodule LlmCore.Agent.Loop do
 
   # Mark a response that succeeded only after stop retries, so downstream
   # consumers can see recovery happened (bounded metadata).
-  defp mark_recovery(response, %{blank: 0, nonterminal: 0}), do: response
+  defp mark_recovery(response, %{blank: 0}, %{nonterminal_total: 0}), do: response
 
-  defp mark_recovery(response, recovery) do
+  defp mark_recovery(response, recovery, state) do
     metadata = response.metadata || %{}
 
     metadata =
@@ -576,8 +613,8 @@ defmodule LlmCore.Agent.Loop do
         else: metadata
 
     metadata =
-      if recovery.nonterminal > 0,
-        do: Map.put(metadata, :terminal_recovery_attempts, recovery.nonterminal),
+      if state.nonterminal_total > 0,
+        do: Map.put(metadata, :terminal_recovery_attempts, state.nonterminal_total),
         else: metadata
 
     %{response | metadata: metadata}

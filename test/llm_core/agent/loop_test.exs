@@ -522,6 +522,95 @@ defmodule LlmCore.Agent.LoopTest do
     end
   end
 
+  describe "run/3 terminal_required — review findings (GC-6283)" do
+    test "a duplicated terminal call is never dispatched; the first copy is the terminal" do
+      parent = self()
+      first = %Call{id: "c1", name: "done", arguments: %{"answer" => "a"}}
+      second = %Call{id: "c2", name: "done", arguments: %{"answer" => "b"}}
+
+      llm_send = scripted_llm([%Response{content: nil, tool_calls: [first, second]}])
+
+      resolve_tool = fn call ->
+        send(parent, {:resolved, call})
+        {:ok, "ran"}
+      end
+
+      assert {:ok, response, final_messages} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [done_tool()],
+                 resolve_tool: resolve_tool,
+                 terminal_tool: "done",
+                 terminal_content_key: "answer",
+                 max_iterations: 3
+               )
+
+      assert response.content == "a"
+      assert response.metadata.terminal_args == %{"answer" => "a"}
+      refute_receive {:resolved, _}
+      assert final_messages == [%{role: :user, content: "do work"}]
+    end
+
+    test "narrated stops are bounded per run, not per iteration: narrate → tool → narrate cannot reset the budget" do
+      echo = %Call{id: "e", name: "echo", arguments: %{}}
+
+      llm_send =
+        scripted_llm([
+          %Response{content: "Prose one.", tool_calls: nil},
+          %Response{content: nil, tool_calls: [echo]},
+          %Response{content: "Prose two.", tool_calls: nil},
+          %Response{content: nil, tool_calls: [echo]},
+          %Response{content: "Prose three.", tool_calls: nil},
+          %Response{content: nil, tool_calls: [echo]}
+        ])
+
+      assert {:error,
+              {:terminal_missing, %{attempts: 3, last_content: "Prose three.", iteration: 2}}} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [done_tool(), echo_tool()],
+                 resolve_tool: fn _call -> {:ok, "ok"} end,
+                 terminal_tool: "done",
+                 terminal_required: true,
+                 max_iterations: 10
+               )
+    end
+
+    test "iteration budget exhausted under terminal_required is a terminal_missing error carrying the last prose" do
+      echo = %Call{id: "e", name: "echo", arguments: %{}}
+
+      llm_send =
+        scripted_llm([
+          %Response{content: "I will keep working.", tool_calls: nil},
+          %Response{content: nil, tool_calls: [echo]},
+          %Response{content: nil, tool_calls: [echo]},
+          %Response{content: nil, tool_calls: [echo]}
+        ])
+
+      assert {:error,
+              {:terminal_missing,
+               %{reason: :max_iterations, attempts: 1, last_content: "I will keep working."}}} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [done_tool(), echo_tool()],
+                 resolve_tool: fn _call -> {:ok, "ok"} end,
+                 terminal_tool: "done",
+                 terminal_required: true,
+                 max_iterations: 3
+               )
+    end
+
+    test "iteration budget exhausted without terminal_required keeps the classic error" do
+      echo = %Call{id: "e", name: "echo", arguments: %{}}
+      llm_send = scripted_llm(List.duplicate(%Response{content: nil, tool_calls: [echo]}, 3))
+
+      assert {:error, :budget_exceeded} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [done_tool(), echo_tool()],
+                 resolve_tool: fn _call -> {:ok, "ok"} end,
+                 terminal_tool: "done",
+                 max_iterations: 2
+               )
+    end
+  end
+
   defp capturing_llm(parent, responses) do
     pid = start_supervised!({Agent, fn -> responses end})
 

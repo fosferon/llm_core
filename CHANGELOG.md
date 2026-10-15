@@ -10,10 +10,13 @@ All notable changes to this project will be documented in this file.
   a response with no tool calls and prose is a **narrated stop**, never a
   completion. The model's prose is appended as an assistant message, a
   `:terminal_nudge` user message follows (default names the terminal tool), and
-  the same iteration is retried under `:max_nonterminal_stops` (default 3)
-  without consuming the iteration budget. Exhaustion returns the typed error
-  `{:terminal_missing, %{iteration:, attempts:, last_content:, finish_reasons:,
-  terminal_tool:, provider:, model:}}` so the caller decides how to degrade. A
+  the same iteration is retried without consuming the iteration budget.
+  Narrated stops are budgeted per run by `:max_nonterminal_stops` (default 3),
+  so narrate → nudge → tool call → narrate cannot reset it. Exhausting that
+  budget, or the iteration budget before the terminal tool is called, returns
+  the typed error `{:terminal_missing, %{iteration:, attempts:, last_content:,
+  finish_reasons:, terminal_tool:, provider:, model:}}` (the iteration case
+  adds `reason: :max_iterations`) so the caller decides how to degrade. A
   completion reached after retries carries
   `response.metadata.terminal_recovery_attempts`. (GC-6279)
 - `:terminal_content_key` — the terminal argument whose string value becomes
@@ -30,8 +33,10 @@ All notable changes to this project will be documented in this file.
   (assistant message plus tool results) is appended to the final messages.
   Previously they were silently dropped because `ParseToolCalls` decided
   `:done` at parse time; the decision now belongs to `LoopDecision`. A lone
-  terminal call behaves exactly as before. `BudgetGuard` no longer counts a
-  terminal response against the iteration ceiling.
+  terminal call behaves exactly as before. Duplicate copies of the terminal
+  call (a provider repeating it under distinct ids) are dropped and traced,
+  never dispatched. `BudgetGuard` no longer counts a terminal response against
+  the iteration ceiling.
 
 ## 0.8.1 — 2026-10-07
 
