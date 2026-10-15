@@ -49,6 +49,7 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   def call(%Context{status: :error} = ctx, _opts), do: ctx
   def call(%Context{decision: {:done, _}} = ctx, _opts), do: ctx
   def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
+  def call(%Context{decision: {:nonterminal_stop, _}} = ctx, _opts), do: ctx
 
   def call(
         %Context{tool_calls: calls, resolve_tool: resolve_fn, tool_results: prior} = ctx,

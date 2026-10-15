@@ -2,6 +2,77 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.0 — 2026-10-15
+
+### Added
+
+- `LlmCore.Agent.Loop.run/3` accepts `:terminal_required` (with `:terminal_tool`):
+  a response with no tool calls and prose is a **narrated stop**, never a
+  completion. The model's prose is appended as an assistant message, a
+  `:terminal_nudge` user message follows (default names the terminal tool), and
+  the same iteration is retried without consuming the iteration budget.
+  Narrated stops are budgeted per run by `:max_nonterminal_stops` (default 3),
+  so narrate → nudge → tool call → narrate cannot reset it. Exhausting that
+  budget, or the iteration budget before the terminal tool is called, returns
+  the typed error `{:terminal_missing, %{iteration:, attempts:, last_content:,
+  finish_reasons:, terminal_tool:, provider:, model:}}` (the iteration case
+  adds `reason: :max_iterations`) so the caller decides how to degrade. A
+  completion reached after retries carries
+  `response.metadata.terminal_recovery_attempts`. (GC-6279)
+- `:terminal_content_key` — the terminal argument whose string value becomes
+  `response.content`; the model's own prose, when present, survives under
+  `response.metadata.terminal_prose`. A blank or missing argument leaves the
+  content untouched.
+- `LlmCore.Agent.Context` carries `terminal_required` and the
+  `{:nonterminal_stop, response}` decision.
+- `{:empty_stop, details}` gains `last_content` (the last narrated prose seen in
+  the run, or `nil`), so a blank stop after a narrated stop does not lose it.
+
+### Fixed
+
+- A tool call that failed validation (unknown tool, invalid arguments) produced
+  an error result whose assistant message did not list the call — an orphaned
+  `role: :tool` message that providers reject on the next turn. The assistant
+  message now lists exactly the calls that have a result.
+
+### Changed
+
+- Sibling tool calls in the same response as the terminal call are now
+  validated and dispatched before the loop returns, and their transcript
+  (assistant message plus tool results) is appended to the final messages.
+  Previously they were silently dropped because `ParseToolCalls` decided
+  `:done` at parse time; the decision now belongs to `LoopDecision`. A lone
+  terminal call returns the same response and final messages as before and
+  emits no `loop_iteration` event; its `on_iteration` context now carries the
+  call under `terminal_tool_call` with `tool_calls: []` (previously
+  `[terminal_call]`). Duplicate copies of the terminal call (a provider
+  repeating it under distinct ids) are dropped and traced, never dispatched.
+  `BudgetGuard` no longer counts a terminal response against the iteration
+  ceiling.
+
+### Notes
+
+- Nudge messages pushed during recovery are ordinary `role: :user` entries in
+  the returned `final_messages`; callers that persist or display the transcript
+  should expect them.
+- Under `terminal_required` the per-run LLM-call ceiling is
+  `max_iterations + max_nonterminal_stops` plus blank-stop retries
+  (`max_blank_stops` per iteration, pre-existing).
+- `last_content` is the model's prose verbatim and unbounded by design — it is
+  the payload a caller degrades to. Truncate before logging it.
+- Under `terminal_required`, `attempts` and `finish_reasons` in
+  `{:terminal_missing, details}` are both per run (narrated stops only);
+  `{:empty_stop, details}` keeps its per-iteration blank-stop scope and now
+  always carries `last_content` (`nil` when nothing was narrated) — a new key
+  on that map even for callers that use no terminal options.
+- Under `terminal_required`, iteration exhaustion is reported as
+  `{:terminal_missing, %{reason: :max_iterations, …}}`, never as
+  `:budget_exceeded` / `:max_iterations_reached`; branch on `reason`.
+- `:terminal_required` must be a boolean; any other value raises
+  `ArgumentError`. A blank `:terminal_nudge` falls back to the default.
+- A `:terminal_content_key` whose value is present but not a string is logged
+  at warning level and leaves the content unchanged.
+
 ## 0.8.1 — 2026-10-07
 
 ### Fixed

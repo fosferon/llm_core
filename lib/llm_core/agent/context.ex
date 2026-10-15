@@ -20,6 +20,9 @@ defmodule LlmCore.Agent.Context do
       When set, `DispatchTools` checks for dispatch recipes via
       `resolver_module.dispatch_recipe/1`.
     * `terminal_tool` — Optional tool name that terminates the loop when called.
+    * `terminal_required` — When `true` (with `terminal_tool`), a no-tool-call
+      response with prose is a `{:nonterminal_stop, response}` decision rather
+      than completion; the outer loop owns the bounded recovery.
     * `iteration` — Current iteration count (0-based)
     * `max_iterations` — Hard iteration limit
 
@@ -35,7 +38,8 @@ defmodule LlmCore.Agent.Context do
   ### Output — read by the outer loop after pipeline exit
 
     * `decision` — `{:continue, messages}`, `{:done, response}`,
-      `{:blank_stop, response}`, or `{:error, reason}`
+      `{:blank_stop, response}`, `{:nonterminal_stop, response}`, or
+      `{:error, reason}`
     * `status` — `:ok` or `:error` (short-circuit flag for stages)
     * `error` — Error detail when `status == :error`
     * `trace` — Accumulated trace entries for observability
@@ -44,6 +48,11 @@ defmodule LlmCore.Agent.Context do
   blank (nil/whitespace) — a degenerate provider completion that must not be
   accepted as final. The outer loop owns the separately bounded recovery
   policy for this decision.
+
+  `{:nonterminal_stop, response}` marks a no-tool-call response with prose
+  while `terminal_required` is set — the model narrated instead of finishing
+  through the terminal tool. Like a blank stop, it is never accepted as
+  final; the outer loop owns its separately bounded recovery.
   """
 
   alias LlmCore.LLM.Response
@@ -55,6 +64,7 @@ defmodule LlmCore.Agent.Context do
           {:continue, [map()]}
           | {:done, Response.t()}
           | {:blank_stop, Response.t()}
+          | {:nonterminal_stop, Response.t()}
           | {:error, term()}
           | nil
 
@@ -65,6 +75,7 @@ defmodule LlmCore.Agent.Context do
           resolve_tool: (Call.t() -> {:ok, String.t()} | {:error, String.t()}) | nil,
           resolver_module: module() | nil,
           terminal_tool: String.t() | nil,
+          terminal_required: boolean(),
           iteration: non_neg_integer(),
           max_iterations: pos_integer(),
           tool_calls: [Call.t()],
@@ -85,6 +96,7 @@ defmodule LlmCore.Agent.Context do
     :resolve_tool,
     :resolver_module,
     :terminal_tool,
+    terminal_required: false,
     messages: [],
     tools: [],
     iteration: 0,
