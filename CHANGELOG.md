@@ -60,6 +60,14 @@ All notable changes to this project will be documented in this file.
   (`max_blank_stops` per iteration, pre-existing).
 - `last_content` is the model's prose verbatim and unbounded by design — it is
   the payload a caller degrades to. Truncate before logging it.
+- Under `terminal_required`, `attempts` and `finish_reasons` in
+  `{:terminal_missing, details}` are both per run (narrated stops only);
+  `{:empty_stop, details}` keeps its per-iteration blank-stop scope and now
+  always carries `last_content` (`nil` when nothing was narrated) — a new key
+  on that map even for callers that use no terminal options.
+- Under `terminal_required`, iteration exhaustion is reported as
+  `{:terminal_missing, %{reason: :max_iterations, …}}`, never as
+  `:budget_exceeded` / `:max_iterations_reached`; branch on `reason`.
 - `:terminal_required` must be a boolean; any other value raises
   `ArgumentError`. A blank `:terminal_nudge` falls back to the default.
 - A `:terminal_content_key` whose value is present but not a string is logged

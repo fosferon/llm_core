@@ -227,6 +227,7 @@ defmodule LlmCore.Agent.Loop do
       # Narrated-stop budget is per RUN: a model that narrates, is nudged
       # into one tool call, then narrates again must not reset it.
       nonterminal_total: 0,
+      narrated_finish_reasons: [],
       last_narrated: nil,
       iteration: 0
     }
@@ -271,7 +272,7 @@ defmodule LlmCore.Agent.Loop do
        iteration: state.iteration,
        attempts: state.nonterminal_total,
        last_content: narrated_content(state.last_narrated),
-       finish_reasons: [],
+       finish_reasons: state.narrated_finish_reasons,
        terminal_tool: state.terminal_tool,
        provider: narrated_field(state.last_narrated, :provider),
        model: narrated_field(state.last_narrated, :model)
@@ -358,11 +359,13 @@ defmodule LlmCore.Agent.Loop do
 
           {:nonterminal_stop, narrated} ->
             attempts = state.nonterminal_total + 1
-            state = %{state | nonterminal_total: attempts, last_narrated: narrated}
 
-            recovery = %{
-              recovery
-              | finish_reasons: recovery.finish_reasons ++ [finish_reason(narrated)]
+            state = %{
+              state
+              | nonterminal_total: attempts,
+                last_narrated: narrated,
+                narrated_finish_reasons:
+                  state.narrated_finish_reasons ++ [finish_reason(narrated)]
             }
 
             if attempts >= state.max_nonterminal_stops do
@@ -378,7 +381,7 @@ defmodule LlmCore.Agent.Loop do
                   iteration: iteration,
                   attempts: attempts,
                   last_content: narrated.content,
-                  finish_reasons: recovery.finish_reasons,
+                  finish_reasons: state.narrated_finish_reasons,
                   terminal_tool: state.terminal_tool,
                   provider: narrated.provider,
                   model: narrated.model
