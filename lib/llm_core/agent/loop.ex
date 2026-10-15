@@ -138,7 +138,8 @@ defmodule LlmCore.Agent.Loop do
       * `:terminal_content_key` — argument name of the terminal call whose
         string value becomes `response.content` (the model's own prose, if
         any, is kept under `response.metadata.terminal_prose`). A blank or
-        missing argument leaves the content untouched.
+        missing argument leaves the content untouched; a present non-string
+        value is logged and leaves it untouched.
       * `:max_nonterminal_stops` — max narrated stops tolerated per run
         under `:terminal_required` (default: #{@default_max_nonterminal_stops}).
       * `:max_blank_stops` — max consecutive blank-stop responses tolerated
@@ -153,6 +154,8 @@ defmodule LlmCore.Agent.Loop do
   ## Returns
 
     * `{:ok, final_response, final_messages}` — LLM produced a text response
+      (or called the terminal tool). Nudges pushed during recovery remain in
+      `final_messages` as ordinary user messages.
     * `{:error, reason}` — Budget exceeded, LLM error, pipeline error,
       repeated blank stops (`{:empty_stop, %{iteration:, attempts:,
       finish_reasons:, provider:, model:}}`), or repeated narrated stops
@@ -170,7 +173,13 @@ defmodule LlmCore.Agent.Loop do
     resolve_tool = Keyword.fetch!(opts, :resolve_tool)
     resolver_module = Keyword.get(opts, :resolver_module)
     terminal_tool = Keyword.get(opts, :terminal_tool)
-    terminal_required = Keyword.get(opts, :terminal_required, false) == true
+    terminal_required = Keyword.get(opts, :terminal_required, false)
+
+    unless is_boolean(terminal_required) do
+      raise ArgumentError,
+            ":terminal_required must be a boolean, got: #{inspect(terminal_required)}"
+    end
+
     terminal_content_key = Keyword.get(opts, :terminal_content_key)
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     max_blank_stops = Keyword.get(opts, :max_blank_stops, @default_max_blank_stops)
@@ -183,7 +192,15 @@ defmodule LlmCore.Agent.Loop do
       raise ArgumentError, ":terminal_required needs a :terminal_tool name"
     end
 
-    terminal_nudge = Keyword.get(opts, :terminal_nudge) || default_terminal_nudge(terminal_tool)
+    terminal_nudge =
+      case Keyword.get(opts, :terminal_nudge) do
+        nudge when is_binary(nudge) ->
+          if String.trim(nudge) == "", do: default_terminal_nudge(terminal_tool), else: nudge
+
+        _ ->
+          default_terminal_nudge(terminal_tool)
+      end
+
     on_iteration = Keyword.get(opts, :on_iteration)
     pipeline_opts = Keyword.get(opts, :pipeline_opts, sync: true)
     llm_opts = [tools: tools] ++ Keyword.get(opts, :llm_opts, [])
@@ -290,8 +307,10 @@ defmodule LlmCore.Agent.Loop do
   # bounded per iteration (consecutive); narrated stops are bounded per RUN
   # (`state.nonterminal_total`). Exhaustion terminates with a typed
   # error (`{:empty_stop, details}` / `{:terminal_missing, details}`)
-  # carrying bounded diagnostics: iteration number, attempt count, the
-  # observed finish reasons and, for narrated stops, the last prose.
+  # carrying scalar diagnostics (iteration, attempts, finish reasons,
+  # provider, model) plus `last_content`: the model's last narrated prose,
+  # verbatim and unbounded by design — it is the payload a caller degrades
+  # to, not a log line. Callers that log it must truncate it themselves.
   @spec recover_stops(map(), llm_send_fn(), keyword(), non_neg_integer(), map()) ::
           {:continue, map()}
           | {:done, LlmCore.LLM.Response.t(), [map()], non_neg_integer()}
@@ -322,6 +341,7 @@ defmodule LlmCore.Agent.Loop do
                   iteration: iteration,
                   attempts: attempts,
                   finish_reasons: recovery.finish_reasons,
+                  last_content: narrated_content(state.last_narrated),
                   provider: blank.provider,
                   model: blank.model
                 }}, state}
@@ -554,6 +574,8 @@ defmodule LlmCore.Agent.Loop do
 
   # `:terminal_content_key` — the terminal argument that IS the reply. The
   # model's own prose, when present, survives under metadata.terminal_prose.
+  # A present-but-unusable value (not a string) is logged and left alone:
+  # the content stays whatever the model said.
   defp apply_terminal_content(response, %Context{terminal_tool_call: nil}, _key), do: response
   defp apply_terminal_content(response, _ctx, nil), do: response
 
@@ -573,7 +595,16 @@ defmodule LlmCore.Agent.Loop do
           %{response | content: value, metadata: metadata}
         end
 
-      _ ->
+      nil ->
+        response
+
+      other ->
+        require Logger
+
+        Logger.warning(
+          "[Agent.Loop] terminal_content_key #{inspect(key)} is not a string (#{inspect(other) |> String.slice(0, 80)}) — content left unchanged"
+        )
+
         response
     end
   end
@@ -590,13 +621,17 @@ defmodule LlmCore.Agent.Loop do
 
   # A narrated stop keeps the model's prose in the transcript (so it does
   # not repeat itself) and follows it with the nudge, so the message list
-  # still ends on a user turn.
+  # still ends on a user turn. A content-less stop (structured output only)
+  # contributes no assistant message — providers reject nil/blank content.
   defp push_terminal_nudge(state, content) do
+    prose =
+      if is_binary(content) and String.trim(content) != "",
+        do: [%{role: :assistant, content: content}],
+        else: []
+
     %{
       state
-      | messages:
-          state.messages ++
-            [%{role: :assistant, content: content}, %{role: :user, content: state.terminal_nudge}]
+      | messages: state.messages ++ prose ++ [%{role: :user, content: state.terminal_nudge}]
     }
   end
 

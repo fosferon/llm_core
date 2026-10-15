@@ -25,6 +25,15 @@ All notable changes to this project will be documented in this file.
   content untouched.
 - `LlmCore.Agent.Context` carries `terminal_required` and the
   `{:nonterminal_stop, response}` decision.
+- `{:empty_stop, details}` gains `last_content` (the last narrated prose seen in
+  the run, or `nil`), so a blank stop after a narrated stop does not lose it.
+
+### Fixed
+
+- A tool call that failed validation (unknown tool, invalid arguments) produced
+  an error result whose assistant message did not list the call — an orphaned
+  `role: :tool` message that providers reject on the next turn. The assistant
+  message now lists exactly the calls that have a result.
 
 ### Changed
 
@@ -33,10 +42,28 @@ All notable changes to this project will be documented in this file.
   (assistant message plus tool results) is appended to the final messages.
   Previously they were silently dropped because `ParseToolCalls` decided
   `:done` at parse time; the decision now belongs to `LoopDecision`. A lone
-  terminal call behaves exactly as before. Duplicate copies of the terminal
-  call (a provider repeating it under distinct ids) are dropped and traced,
-  never dispatched. `BudgetGuard` no longer counts a terminal response against
-  the iteration ceiling.
+  terminal call returns the same response and final messages as before and
+  emits no `loop_iteration` event; its `on_iteration` context now carries the
+  call under `terminal_tool_call` with `tool_calls: []` (previously
+  `[terminal_call]`). Duplicate copies of the terminal call (a provider
+  repeating it under distinct ids) are dropped and traced, never dispatched.
+  `BudgetGuard` no longer counts a terminal response against the iteration
+  ceiling.
+
+### Notes
+
+- Nudge messages pushed during recovery are ordinary `role: :user` entries in
+  the returned `final_messages`; callers that persist or display the transcript
+  should expect them.
+- Under `terminal_required` the per-run LLM-call ceiling is
+  `max_iterations + max_nonterminal_stops` plus blank-stop retries
+  (`max_blank_stops` per iteration, pre-existing).
+- `last_content` is the model's prose verbatim and unbounded by design — it is
+  the payload a caller degrades to. Truncate before logging it.
+- `:terminal_required` must be a boolean; any other value raises
+  `ArgumentError`. A blank `:terminal_nudge` falls back to the default.
+- A `:terminal_content_key` whose value is present but not a string is logged
+  at warning level and leaves the content unchanged.
 
 ## 0.8.1 — 2026-10-07
 

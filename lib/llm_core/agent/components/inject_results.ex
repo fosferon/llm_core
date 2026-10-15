@@ -34,12 +34,24 @@ defmodule LlmCore.Agent.Components.InjectResults do
   def call(%Context{decision: {:blank_stop, _}} = ctx, _opts), do: ctx
   def call(%Context{decision: {:nonterminal_stop, _}} = ctx, _opts), do: ctx
 
-  def call(%Context{response: response, tool_calls: calls, tool_results: results} = ctx, _opts) do
-    # The assistant message that requested the tool calls
+  # A lone terminal call has nothing to inject: no results, no transcript.
+  def call(%Context{terminal_tool_call: %{}, tool_results: []} = ctx, _opts), do: ctx
+
+  def call(%Context{response: response, tool_results: results} = ctx, _opts) do
+    # The assistant message that requested the tool calls. It lists exactly
+    # the calls that have a result — including calls that failed validation
+    # (unknown tool, bad arguments) and therefore left `tool_calls` — so no
+    # tool result is ever orphaned from its call, which providers reject.
+    # The terminal call, which has no result, is never listed.
+    result_ids = MapSet.new(results, & &1.tool_call_id)
+
+    answered_calls =
+      Enum.filter(response.tool_calls || [], &MapSet.member?(result_ids, &1.id))
+
     assistant_msg = %{
       role: :assistant,
       content: response.content,
-      tool_calls: calls
+      tool_calls: answered_calls
     }
 
     # One message per tool result

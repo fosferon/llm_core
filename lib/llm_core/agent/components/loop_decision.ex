@@ -44,11 +44,16 @@ defmodule LlmCore.Agent.Components.LoopDecision do
   # their results injected, but no further LLM turn follows. The outer loop
   # appends `result_messages` to the transcript and returns the response.
   def call(%Context{terminal_tool_call: %{}, response: response} = ctx, _opts) do
-    :telemetry.execute(
-      [:llm_core, :agent, :loop_iteration],
-      %{iteration: ctx.iteration, tool_calls_count: length(ctx.tool_calls)},
-      %{terminal: true}
-    )
+    # Only a terminal response that actually dispatched siblings counts as
+    # an iteration with tool work; a lone terminal call stays as quiet as
+    # it was in 0.8.x.
+    if ctx.tool_results != [] do
+      :telemetry.execute(
+        [:llm_core, :agent, :loop_iteration],
+        %{iteration: ctx.iteration, tool_calls_count: length(ctx.tool_calls)},
+        %{terminal: true}
+      )
+    end
 
     %{ctx | decision: {:done, response}, trace: ctx.trace ++ [:loop_terminal_done]}
   end

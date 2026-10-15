@@ -71,7 +71,7 @@ final_response.content
 | `:terminal_tool` | No | `nil` | Tool name that stops the loop when called. The call is **not** dispatched — its raw arguments land on `response.metadata.terminal_args` and the full call on `response.metadata.terminal_tool_call`. Sibling tool calls in the same response **are** dispatched first and their transcript is appended to the final messages. Useful for letting the model select a structured result (e.g. citations) as its final turn. |
 | `:terminal_required` | No | `false` | With `:terminal_tool`: a no-tool-call response with prose does **not** end the loop. The prose is appended as an assistant message, `:terminal_nudge` follows as a user message, and the turn is retried. Narrated stops are budgeted per run by `:max_nonterminal_stops`. Exhausting that budget, or the iteration budget before the terminal tool is called, returns `{:error, {:terminal_missing, details}}` with the last prose, so the caller chooses how to degrade. A completion that needed retries carries `response.metadata.terminal_recovery_attempts`. |
 | `:terminal_nudge` | No | names the tool | User-message text for the non-terminal retry. |
-| `:terminal_content_key` | No | `nil` | Argument of the terminal call whose string value becomes `response.content`; the model's own prose, if any, is kept under `response.metadata.terminal_prose`. A blank or missing argument leaves the content untouched. |
+| `:terminal_content_key` | No | `nil` | Argument of the terminal call whose string value becomes `response.content`; the model's own prose, if any, is kept under `response.metadata.terminal_prose`. A blank or missing argument leaves the content untouched; a present non-string value is logged at warning level and leaves it untouched. |
 | `:max_nonterminal_stops` | No | `3` | Narrated stops tolerated per run under `:terminal_required`. |
 | `:max_blank_stops` | No | `3` | Consecutive blank stops (no tool calls, blank content) tolerated per iteration before `{:error, {:empty_stop, details}}`. Retries do not consume iterations. |
 | `:blank_stop_nudge` | No | `nil` | Optional user-message text appended before a blank-stop retry. |
@@ -86,8 +86,9 @@ final_response.content
 |--------|---------|
 | `{:ok, response, messages}` | LLM produced a text-only response. `response` is `LlmCore.LLM.Response.t()`, `messages` is the full conversation history. |
 | `{:error, :max_iterations_reached}` | Iteration budget exhausted without a text-only response. |
+| `{:error, :budget_exceeded}` | `BudgetGuard` refused to dispatch tools on the last allowed iteration. |
 | `{:error, {:empty_stop, details}}` | Repeated blank stops; `details` carries `iteration`, `attempts`, `finish_reasons`, `provider`, `model`. |
-| `{:error, {:terminal_missing, details}}` | Under `:terminal_required`, the terminal tool was never called: narrated stops exhausted the run budget, or the iteration budget ran out (`reason: :max_iterations`); `details` adds `last_content` and `terminal_tool`. |
+| `{:error, {:terminal_missing, details}}` | Under `:terminal_required`, the terminal tool was never called: narrated stops exhausted the run budget, or the iteration budget ran out (`reason: :max_iterations`); `details` adds `last_content` (the full prose, unbounded — truncate before logging) and `terminal_tool`. |
 | `{:error, {:circuit_breaker, msg}}` | Same tool error repeated 3+ times — systematic bug, not transient. |
 | `{:error, {:llm_error, reason}}` | The `llm_send_fn` returned an error. |
 | `{:error, {:pipeline_error, reason}}` | The ALF iteration pipeline crashed. |

@@ -611,6 +611,165 @@ defmodule LlmCore.Agent.LoopTest do
     end
   end
 
+  describe "run/3 terminal_required — review findings round 2 (GC-6283)" do
+    test "a content-less narrated stop (structured only) pushes no nil assistant message before the nudge" do
+      parent = self()
+      terminal_call = %Call{id: "c", name: "done", arguments: %{"answer" => "r"}}
+
+      llm_send =
+        capturing_llm(parent, [
+          %Response{content: nil, structured: %{"x" => 1}, tool_calls: nil},
+          %Response{content: nil, tool_calls: [terminal_call]}
+        ])
+
+      assert {:ok, _response, final_messages} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [done_tool()],
+                 resolve_tool: fn _call -> {:ok, "unused"} end,
+                 terminal_tool: "done",
+                 terminal_required: true,
+                 terminal_nudge: "nudge",
+                 max_iterations: 3
+               )
+
+      assert [%{role: :user, content: "do work"}, %{role: :user, content: "nudge"}] =
+               final_messages
+    end
+
+    test "a blank terminal_nudge falls back to the default nudge" do
+      parent = self()
+      terminal_call = %Call{id: "c", name: "done", arguments: %{"answer" => "r"}}
+
+      llm_send =
+        capturing_llm(parent, [
+          %Response{content: "Prose.", tool_calls: nil},
+          %Response{content: nil, tool_calls: [terminal_call]}
+        ])
+
+      assert {:ok, _response, _} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [done_tool()],
+                 resolve_tool: fn _call -> {:ok, "unused"} end,
+                 terminal_tool: "done",
+                 terminal_required: true,
+                 terminal_nudge: "   ",
+                 max_iterations: 3
+               )
+
+      assert_receive {:llm_call, [_, _, %{role: :user, content: nudge}]}
+      assert nudge =~ "done"
+    end
+
+    test "a lone terminal call emits no loop_iteration event and hands on_iteration an empty transcript" do
+      parent = self()
+      terminal_call = %Call{id: "c", name: "done", arguments: %{"answer" => "r"}}
+      handler_id = {__MODULE__, :lone_terminal, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:llm_core, :agent, :loop_iteration],
+        fn _event, measurements, metadata, _ ->
+          send(parent, {:loop_iteration, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, _response, _} =
+               Loop.run(
+                 [%{role: :user, content: "do work"}],
+                 scripted_llm([%Response{content: nil, tool_calls: [terminal_call]}]),
+                 tools: [done_tool()],
+                 resolve_tool: fn _call -> {:ok, "unused"} end,
+                 terminal_tool: "done",
+                 on_iteration: fn ctx -> send(parent, {:iteration_ctx, ctx}) end
+               )
+
+      refute_receive {:loop_iteration, _, _}
+
+      assert_receive {:iteration_ctx,
+                      %{result_messages: [], tool_results: [], terminal_tool_call: ^terminal_call}}
+    end
+
+    test "a sibling that fails validation yields a transcript whose assistant message lists every call that has a result" do
+      unknown = %Call{id: "x", name: "nope", arguments: %{}}
+      terminal_call = %Call{id: "c", name: "done", arguments: %{"answer" => "r"}}
+
+      assert {:ok, _response, final_messages} =
+               Loop.run(
+                 [%{role: :user, content: "do work"}],
+                 scripted_llm([%Response{content: nil, tool_calls: [unknown, terminal_call]}]),
+                 tools: [done_tool()],
+                 resolve_tool: fn _call -> {:ok, "unused"} end,
+                 terminal_tool: "done"
+               )
+
+      assert [
+               %{role: :user, content: "do work"},
+               %{role: :assistant, tool_calls: [^unknown]},
+               %{role: :tool, tool_call_id: "x", content: "Error: unknown tool" <> _}
+             ] = final_messages
+    end
+
+    test "on the continue path an unknown tool's error result is never orphaned from its assistant call" do
+      parent = self()
+      unknown = %Call{id: "x", name: "nope", arguments: %{}}
+
+      llm_send =
+        capturing_llm(parent, [
+          %Response{content: nil, tool_calls: [unknown]},
+          %Response{content: "final", tool_calls: nil}
+        ])
+
+      assert {:ok, %Response{content: "final"}, _} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [echo_tool()],
+                 resolve_tool: fn _call -> {:ok, "unused"} end,
+                 max_iterations: 3
+               )
+
+      assert_receive {:llm_call,
+                      [
+                        _,
+                        %{role: :assistant, tool_calls: [^unknown]},
+                        %{role: :tool, tool_call_id: "x"}
+                      ]}
+    end
+
+    test "a non-boolean terminal_required is a caller error" do
+      assert_raise ArgumentError, ~r/terminal_required/, fn ->
+        Loop.run(
+          [%{role: :user, content: "do work"}],
+          fn _m, _o -> {:ok, %Response{content: "x"}} end,
+          tools: [done_tool()],
+          resolve_tool: fn _call -> {:ok, "unused"} end,
+          terminal_tool: "done",
+          terminal_required: "true"
+        )
+      end
+    end
+
+    test "an empty_stop under terminal_required still carries the last narrated prose" do
+      llm_send =
+        scripted_llm([
+          %Response{content: "Prose.", tool_calls: nil},
+          blank_stop_response(),
+          blank_stop_response(),
+          blank_stop_response()
+        ])
+
+      assert {:error, {:empty_stop, %{attempts: 3, last_content: "Prose."}}} =
+               Loop.run([%{role: :user, content: "do work"}], llm_send,
+                 tools: [done_tool()],
+                 resolve_tool: fn _call -> {:ok, "unused"} end,
+                 terminal_tool: "done",
+                 terminal_required: true,
+                 max_iterations: 3
+               )
+    end
+  end
+
   defp capturing_llm(parent, responses) do
     pid = start_supervised!({Agent, fn -> responses end})
 
