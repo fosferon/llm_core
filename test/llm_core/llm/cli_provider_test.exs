@@ -21,9 +21,9 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
     test "loads built-in kimi config" do
       assert {:ok, config} = CLIProvider.config(:kimi_cli)
-      assert config.binary == "kimi-cli"
+      assert config.binary == "kimi"
       assert config.prompt_flag == "--prompt"
-      assert config.system_prompt_transport == :file_flag
+      assert config.system_prompt_transport == :inline_fallback
       assert config.model_resolution == :provider_runtime
     end
 
@@ -95,7 +95,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
       refute CLIProvider.supports?(codex, :system_prompt_file)
 
       assert CLIProvider.supports?(kimi, :system_prompt_file)
-      refute CLIProvider.supports?(kimi, :inline_fallback)
+      assert CLIProvider.supports?(kimi, :inline_fallback)
     end
   end
 
@@ -224,24 +224,28 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert List.last(args) == "explain this"
     end
 
-    test "kimi_cli builds args with non-interactive prefix and agent file flag" do
+    test "kimi_cli builds args with -p prompt mode and no 1.x-only flags" do
       provider = CLIProvider.from_config(:kimi_cli)
 
       args =
         CLIProvider.build_args(provider, "explain this",
-          model: "k2",
-          system_prompt_file: "/tmp/agent.md",
-          cwd: "/project"
+          model: "kimi-code/k3-256k",
+          add_dir: "/extra"
         )
 
-      assert Enum.take(args, 4) == ["--print", "--output-format", "text", "--final-message-only"]
-      assert "--prompt" in args
-      assert "--agent-file" in args
-      assert "/tmp/agent.md" in args
-      assert "--work-dir" in args
-      assert "/project" in args
+      assert Enum.take(args, 2) == ["--prompt", "explain this"]
       assert "--model" in args
-      assert "k2" in args
+      assert "kimi-code/k3-256k" in args
+      assert "--add-dir" in args
+      assert "/extra" in args
+
+      # kimi-cli 1.x flags that kimi-code 2.x rejects or removed
+      refute "--print" in args
+      refute "--final-message-only" in args
+      refute "--output-format" in args
+      refute "--work-dir" in args
+      refute "--yolo" in args
+      refute "--auto" in args
     end
 
     test "semantic auto_approve appends provider-specific unattended args" do
@@ -335,11 +339,14 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert prompt =~ "Write tests"
     end
 
-    test "uses native file transport for kimi without rewriting prompt" do
+    test "uses inline fallback for kimi when given system_prompt text" do
       provider = CLIProvider.from_config(:kimi_cli)
       prompt = CLIProvider.render_prompt(provider, "Write tests", system_prompt: "Be concise.")
 
-      assert prompt == "Write tests"
+      assert prompt =~ "System instructions:"
+      assert prompt =~ "Be concise."
+      assert prompt =~ "User request:"
+      assert prompt =~ "Write tests"
     end
   end
 

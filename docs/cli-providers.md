@@ -21,7 +21,7 @@ These ship in `priv/config/llm_core.toml` and work out of the box when the binar
 | `claude_code` | `claude` | `--print`, system prompt via `--append-system-prompt-file`, `--add-dir` |
 | `droid` | `droid` | `exec` subcommand, `--auto high`, `--cwd`, `--worktree` |
 | `pi_cli` | `pi` | `--print`, `--provider`, `--thinking`, system prompt file |
-| `kimi_cli` | `kimi-cli` | Agent-file YAML transform, `--final-message-only`, output stripping |
+| `kimi_cli` | `kimi` | kimi-code 2.x `-p` prompt mode, inline system prompt, output stripping |
 | `codex_cli` | `codex` | `exec` subcommand, `--full-auto`, file capture via `--output-last-message` |
 | `gemini_cli` | `gemini` | Model selection, standard CLI interface |
 
@@ -115,16 +115,16 @@ How the system prompt reaches the CLI:
 Some CLIs need the system prompt in a specific file format. Declare the transform:
 
 ```toml
-[providers.kimi_cli.cli]
+[providers.my_tool.cli]
 system_prompt_file_transform = "agent_spec_yaml"
 
-[providers.kimi_cli.cli.file_transform_defaults]
+[providers.my_tool.cli.file_transform_defaults]
 version = 1
 extend = "default"
 ```
 
 Supported transforms:
-- `"agent_spec_yaml"` — Generates a YAML agent spec + sibling `system.md`. Used by Kimi CLI's `--agent-file`.
+- `"agent_spec_yaml"` — Generates a YAML agent spec + sibling `system.md`. Built for kimi-cli 1.x's `--agent-file`; no built-in preset uses it.
 
 ### Output Capture
 

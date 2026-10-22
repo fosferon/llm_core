@@ -262,46 +262,47 @@ cost_tier = "cli"
 [providers.kimi_cli]
 type = "cli"
 enabled = true
-aliases = ["kimi", "kimi-cli"]
+aliases = ["kimi", "kimi-cli", "kimi-code"]
 
+# kimi-code 2.x (binary `kimi`, successor of kimi-cli 1.x).
+# Non-interactive mode is `-p/--prompt "<prompt>"`; stdout carries a
+# `kimi version X.Y.Z` banner line and a trailing session footer, both
+# stripped via output_strip_patterns below. There are no --print,
+# --final-message-only, or --work-dir flags in 2.x, and the process cwd
+# is set by the caller at spawn (use --add-dir for extra workspace dirs).
 [providers.kimi_cli.cli]
-binary = "kimi-cli"
+binary = "kimi"
 default_timeout = 1800000
 model_resolution = "provider_runtime"
 prompt_position = "flagged"
 prompt_flag = "--prompt"
 prompt_transport = "flagged"
-system_prompt_transport = "file_flag"
-# Kimi's --agent-file expects a YAML agent spec, not raw markdown.
-# This transform generates agent.yaml + sibling system.md from the
-# caller's system prompt text. Values resolve as:
-#   dispatch opts > file_transform_defaults > built-in fallbacks
-system_prompt_file_transform = "agent_spec_yaml"
-cwd_flag = "--work-dir"
+# --agent-file expects a kimi-code agent definition Markdown file, not a
+# raw system prompt, so system prompts are inlined into the user prompt
+# instead of going through a file transform.
+system_prompt_transport = "inline_fallback"
 add_dir_flag = "--add-dir"
-output_mode = "final_message_only"
+output_mode = "stdout_text"
 tool_call_transport = "llm_core_json"
 stdin_hack = false
-prefix_args = ["--print", "--output-format", "text", "--final-message-only"]
-# Kimi appends a resumable session footer even in final-message mode.
-# Strip it at the provider layer so downstream callers see only the final reply.
-output_strip_patterns = ["\\n{2,}To resume this session: kimi -r [^\\n]+\\s*$"]
-auto_approve_args = ["--yolo"]
-install_hint = "Install Kimi CLI and ensure `kimi-cli` is in PATH"
+prefix_args = []
+# kimi-code 2.x prints a `kimi version X.Y.Z` banner as the first stdout
+# line and appends a resumable session footer even in prompt mode.
+# Strip both at the provider layer so callers see only the reply.
+output_strip_patterns = ["\\Akimi version \\d+\\.\\d+\\.\\d+[^\\n]*\\n?", "\\n{2,}To resume this session: kimi -r [^\\n]+\\s*$"]
+# kimi-code 2.x rejects --prompt combined with --yolo or --auto, so no
+# auto-approve args can be passed in prompt mode.
+auto_approve_args = []
+install_hint = "Install kimi-code (binary: kimi), https://www.kimi.com/code"
 
 [providers.kimi_cli.cli.flags]
 model = "--model"
-cwd = "--work-dir"
 add_dir = "--add-dir"
 system_prompt_file = "--agent-file"
 
 [providers.kimi_cli.cli.preflight]
 help_args = ["--help"]
-expect_in_help = ["--agent-file", "--print", "--work-dir"]
-
-[providers.kimi_cli.cli.file_transform_defaults]
-version = 1
-extend = "default"
+expect_in_help = ["--prompt", "--model", "--agent-file"]
 
 [providers.kimi_cli.capabilities]
 streaming = true

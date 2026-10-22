@@ -169,7 +169,8 @@ Some CLIs need the system prompt in a specific format rather than raw markdown.
 Use `system_prompt_file_transform` to declare the preparation step:
 
 - `"agent_spec_yaml"` — generates a nested YAML agent spec with a sibling
-  `system.md`. Used by Kimi CLI's `--agent-file`. Generates:
+  `system.md`. Built for kimi-cli 1.x's `--agent-file`; no built-in preset
+  uses it. Generates:
 
   ```yaml
   version: 1

@@ -318,7 +318,7 @@ See the [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) for 
 | Claude Code | CLI | Config-driven | `--print`, system prompt file, auto-approve |
 | Droid | CLI | Config-driven | `exec` subcommand, `--auto`, `--cwd` |
 | Pi CLI | CLI | Config-driven | `--print`, `--provider`, `--thinking` |
-| Kimi CLI | CLI | Config-driven | Agent-file YAML transform, final-message capture |
+| Kimi Code | CLI | Config-driven | `-p` prompt mode, inline system prompt, output stripping |
 | Codex CLI | CLI | Config-driven | `--full-auto`, file capture, sandbox bypass |
 | Gemini CLI | CLI | Config-driven | Model selection |
 

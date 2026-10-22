@@ -43,8 +43,10 @@ defmodule LlmCore.LLM.CLIProvider.Config do
 
       Supported transforms:
       - `:agent_spec_yaml` — generates a YAML agent spec file plus a sibling
-        `system.md` containing the raw prompt. Used by Kimi CLI's `--agent-file`.
-        Generates the nested structure Kimi expects:
+        `system.md` containing the raw prompt. Built for kimi-cli 1.x's
+        `--agent-file`; no bundled preset uses it (kimi-code 2.x expects a
+        Markdown agent definition at `--agent-file` instead).
+        Generates the nested structure kimi-cli 1.x expects:
 
             version: 1
             agent:
@@ -170,7 +172,7 @@ defmodule LlmCore.LLM.CLIProvider do
   | `:claude_code` | `claude` | Wraps with `/bin/sh` for stdin redirect |
   | `:droid` | `droid` | Subcommand `exec`, rich flag set |
   | `:pi_cli` | `pi` | Pi CLI non-interactive dispatch (`--print`) |
-  | `:kimi_cli` | `kimi-cli` | Kimi CLI with agent-file support |
+  | `:kimi_cli` | `kimi` | kimi-code 2.x (`-p` prompt mode, inline system prompt) |
   | `:codex_cli` | `codex` | OpenAI Codex CLI |
   | `:gemini_cli` | `gemini` | Google Gemini CLI |
 
