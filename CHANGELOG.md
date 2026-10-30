@@ -13,12 +13,12 @@ All notable changes to this project will be documented in this file.
   the crash is preserved in the `{:cascade_exhausted, ...}` attempts list; a
   single-candidate crash surfaces through `build_send_result/2` as a structured
   `LlmCore.LLM.Error` (`type: :provider_error`) carrying the crash details
-  instead of a generic inspect string. (GC-5857)
+  instead of a generic inspect string.
 - Appliance health and native model-availability probes now request
   `Connection: close` with a bounded `pool_timeout` and `retry: false`, so a
   probe that times out cannot leave a stale pooled HTTP/1 socket for the next
   request (which could crash with a `CaseClauseError` matching a stale
-  `{:status, ref, 200}` tuple). (GC-5857)
+  `{:status, ref, 200}` tuple).
 
 ## 0.9.0 — 2026-10-15
 
@@ -36,7 +36,7 @@ All notable changes to this project will be documented in this file.
   finish_reasons:, terminal_tool:, provider:, model:}}` (the iteration case
   adds `reason: :max_iterations`) so the caller decides how to degrade. A
   completion reached after retries carries
-  `response.metadata.terminal_recovery_attempts`. (GC-6279)
+  `response.metadata.terminal_recovery_attempts`.
 - `:terminal_content_key` — the terminal argument whose string value becomes
   `response.content`; the model's own prose, when present, survives under
   `response.metadata.terminal_prose`. A blank or missing argument leaves the
