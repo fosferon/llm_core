@@ -1,6 +1,8 @@
 defmodule LlmCore.LLM.NativeTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias LlmCore.LLM.Error
   alias LlmCore.LLM.Native
   alias LlmCore.LLM.Response
@@ -75,6 +77,20 @@ defmodule LlmCore.LLM.NativeTest do
 
       assert error.message =~ ":econnrefused"
       assert error.details == nil
+    end
+
+    test "a candidate crash becomes a structured provider error (GC-5857)" do
+      details = %{provider: Mod1, exception: "boom", kind: :error}
+
+      assert {:error, %Error{} = error} =
+               Native.build_send_result({:error, {:crashed, details}}, 5)
+
+      assert error.type == :provider_error
+      assert error.provider == :native
+      assert error.details == details
+      assert error.message =~ "Mod1"
+      assert error.message =~ "boom"
+      refute error.message =~ "Native dispatch error:"
     end
   end
 
@@ -178,6 +194,64 @@ defmodule LlmCore.LLM.NativeTest do
                Native.try_cascade(candidates, run)
     end
 
+    test "a crashing candidate is isolated and the cascade advances (GC-5857)" do
+      calls = :counters.new(1, [])
+
+      run = fn
+        {Mod1, _, _} ->
+          :counters.add(calls, 1, 1)
+          raise CaseClauseError, term: {:status, make_ref(), 200}
+
+        {Mod2, _, _} ->
+          :counters.add(calls, 1, 1)
+          {:ok, %{content: "recovered on fallback"}, [:msg]}
+      end
+
+      candidates = [{Mod1, "m1", []}, {Mod2, "m2", []}]
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{content: "recovered on fallback"}, [:msg]} =
+                   Native.try_cascade(candidates, run)
+        end)
+
+      assert :counters.get(calls, 1) == 2
+      assert log =~ "Mod1"
+    end
+
+    test "a crashing candidate exit is isolated too (GC-5857)" do
+      run = fn
+        {Mod1, _, _} -> exit(:stale_pooled_socket)
+        {Mod2, _, _} -> {:ok, %{content: "survived exit"}, []}
+      end
+
+      candidates = [{Mod1, "m1", []}, {Mod2, "m2", []}]
+
+      assert {:ok, %{content: "survived exit"}, []} = Native.try_cascade(candidates, run)
+    end
+
+    test "crashes are recorded in cascade exhaustion (GC-5857)" do
+      run = fn
+        {Mod1, _, _} -> raise "boom-1"
+        {Mod2, _, _} -> {:error, :timeout}
+      end
+
+      candidates = [{Mod1, "m1", []}, {Mod2, "m2", []}]
+
+      assert {:error,
+              {:cascade_exhausted,
+               %{
+                 last: :timeout,
+                 attempts: [
+                   %{
+                     provider: Mod1,
+                     reason: {:crashed, %{provider: Mod1, exception: "boom-1", kind: :error}}
+                   },
+                   %{provider: Mod2, reason: :timeout}
+                 ]
+               }}} = Native.try_cascade(candidates, run)
+    end
+
     test "empty candidate list returns a clear error" do
       run = fn _ -> flunk("runner should not be called with empty list") end
 
@@ -218,6 +292,67 @@ defmodule LlmCore.LLM.NativeTest do
       assert message =~ "[native] cascade"
       assert message =~ "[routing] default"
       assert message =~ "x (no_credentials)"
+    end
+  end
+
+  describe "probe connection isolation (GC-5857)" do
+    test "model availability probe sends connection: close" do
+      model = "probe-model-#{System.unique_integer([:positive])}"
+      body = ~s({"data":[{"id":"#{model}"}]})
+      {port, request_task} = start_probe_server(body)
+
+      assert Native.model_available_on_appliance?(model,
+               endpoint_url: "http://127.0.0.1:#{port}"
+             )
+
+      request = Task.await(request_task, 5_000)
+
+      assert request =~ "GET /v1/models"
+      assert String.downcase(request) =~ "connection: close"
+    end
+
+    test "probe options isolate the request and bound the pool wait" do
+      opts = Native.probe_options()
+
+      assert opts[:headers] == [{"connection", "close"}]
+      assert opts[:pool_timeout] == 3_000
+      assert opts[:receive_timeout] == 3_000
+      assert opts[:retry] == false
+    end
+  end
+
+  defp start_probe_server(body) do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listen)
+
+    task =
+      Task.async(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen, 5_000)
+        request = recv_request_headers(socket, "")
+
+        response =
+          "HTTP/1.1 200 OK\r\n" <>
+            "content-type: application/json\r\n" <>
+            "content-length: #{byte_size(body)}\r\n" <>
+            "connection: close\r\n\r\n" <> body
+
+        :gen_tcp.send(socket, response)
+        :gen_tcp.close(socket)
+        :gen_tcp.close(listen)
+        request
+      end)
+
+    {port, task}
+  end
+
+  defp recv_request_headers(socket, acc) do
+    if String.contains?(acc, "\r\n\r\n") do
+      acc
+    else
+      case :gen_tcp.recv(socket, 0, 5_000) do
+        {:ok, chunk} -> recv_request_headers(socket, acc <> chunk)
+        {:error, _} -> acc
+      end
     end
   end
 end

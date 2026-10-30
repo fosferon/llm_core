@@ -16,6 +16,22 @@ defmodule LlmCore.LLM.Appliance do
   @health_path "/health"
   @default_timeout 90_000
 
+  # Probe requests must never leave a reusable pooled HTTP/1 connection behind:
+  # a probe that times out mid-response otherwise strands the socket for the next
+  # request, which then reads the stale reply and crashes with a CaseClauseError.
+  @probe_headers [{"connection", "close"}]
+
+  @doc false
+  @spec probe_options(pos_integer()) :: keyword()
+  def probe_options(timeout) do
+    [
+      headers: @probe_headers,
+      pool_timeout: timeout,
+      receive_timeout: timeout,
+      retry: false
+    ]
+  end
+
   @doc """
   Checks if the appliance base URL is configured and the health endpoint responds.
   """
@@ -133,7 +149,7 @@ defmodule LlmCore.LLM.Appliance do
   def health(url) when is_binary(url) do
     endpoint = String.trim_trailing(url, "/") <> @health_path
 
-    case Req.get(endpoint, receive_timeout: 2_000, retry: false) do
+    case Req.get(endpoint, probe_options(2_000)) do
       {:ok, %Req.Response{status: status}} when status in 200..399 -> true
       _ -> false
     end

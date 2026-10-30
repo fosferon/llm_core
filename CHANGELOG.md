@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.1 — 2026-10-30
+
+### Fixed
+
+- A native cascade candidate that raises or exits no longer aborts the whole
+  dispatch. `LlmCore.LLM.Native.walk_cascade/3` isolates the crash as a typed
+  `{:crashed, %{provider:, exception:, kind:}}` reason, logs a warning naming
+  the provider, and advances to the next candidate. If every candidate fails,
+  the crash is preserved in the `{:cascade_exhausted, ...}` attempts list; a
+  single-candidate crash surfaces through `build_send_result/2` as a structured
+  `LlmCore.LLM.Error` (`type: :provider_error`) carrying the crash details
+  instead of a generic inspect string. (GC-5857)
+- Appliance health and native model-availability probes now request
+  `Connection: close` with a bounded `pool_timeout` and `retry: false`, so a
+  probe that times out cannot leave a stale pooled HTTP/1 socket for the next
+  request (which could crash with a `CaseClauseError` matching a stale
+  `{:status, ref, 200}` tuple). (GC-5857)
+
 ## 0.9.0 — 2026-10-15
 
 ### Added

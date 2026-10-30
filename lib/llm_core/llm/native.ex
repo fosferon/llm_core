@@ -151,6 +151,18 @@ defmodule LlmCore.LLM.Native do
      )}
   end
 
+  def build_send_result(
+        {:error, {:crashed, %{provider: mod, exception: exception, kind: kind} = details}},
+        _elapsed
+      ) do
+    {:error,
+     Error.new(:provider_error,
+       message: "Native candidate #{inspect(mod)} crashed (#{kind}): #{exception}",
+       provider: :native,
+       details: details
+     )}
+  end
+
   def build_send_result({:error, {:no_native_provider, %{reason: reason} = details}}, _elapsed) do
     {:error,
      Error.new(:provider_error,
@@ -245,7 +257,18 @@ defmodule LlmCore.LLM.Native do
   defp walk_cascade([candidate | rest], run_fn, attempts) do
     {mod, _, _} = candidate
 
-    case run_fn.(candidate) do
+    outcome =
+      try do
+        run_fn.(candidate)
+      rescue
+        e ->
+          {:error, {:crashed, %{provider: mod, exception: Exception.message(e), kind: :error}}}
+      catch
+        :exit, reason ->
+          {:error, {:crashed, %{provider: mod, exception: inspect(reason), kind: :exit}}}
+      end
+
+    case outcome do
       {:ok, _response, _messages} = ok ->
         ok
 
@@ -363,7 +386,13 @@ defmodule LlmCore.LLM.Native do
 
   # Check if a specific model is loaded on the local Appliance.
   # Queries /v1/models directly. Result cached in process dict for 60s.
-  defp model_available_on_appliance?(model) do
+  @doc false
+  @spec probe_options() :: keyword()
+  def probe_options, do: LlmCore.LLM.Appliance.probe_options(3_000)
+
+  @doc false
+  @spec model_available_on_appliance?(String.t(), keyword()) :: boolean()
+  def model_available_on_appliance?(model, opts \\ []) do
     now = System.monotonic_time(:second)
     cache = Process.get(:appliance_models_cache)
 
@@ -374,20 +403,18 @@ defmodule LlmCore.LLM.Native do
 
         _ ->
           ids =
-            case LlmCore.LLM.Appliance.discover() do
-              [{_, %URI{} = uri} | _] ->
-                url = String.trim_trailing(URI.to_string(uri), "/") <> "/v1/models"
+            case models_url(opts) do
+              nil ->
+                []
 
-                case Req.get(url, receive_timeout: 3_000, retry: false) do
+              url ->
+                case Req.get(url, probe_options()) do
                   {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
                     Enum.map(data, & &1["id"])
 
                   _ ->
                     []
                 end
-
-              _ ->
-                []
             end
 
           Process.put(:appliance_models_cache, {now, ids})
@@ -395,6 +422,22 @@ defmodule LlmCore.LLM.Native do
       end
 
     model in models
+  end
+
+  defp models_url(opts) do
+    case Keyword.get(opts, :endpoint_url) do
+      url when is_binary(url) ->
+        String.trim_trailing(url, "/") <> "/v1/models"
+
+      _ ->
+        case LlmCore.LLM.Appliance.discover() do
+          [{_, %URI{} = uri} | _] ->
+            String.trim_trailing(URI.to_string(uri), "/") <> "/v1/models"
+
+          _ ->
+            nil
+        end
+    end
   end
 
   defp build_llm_send(provider_mod, resolved_model, provider_opts) do

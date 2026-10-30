@@ -161,4 +161,61 @@ defmodule LlmCore.LLM.ApplianceTest do
       assert Appliance.classify_error(500, "nope").type == :provider_error
     end
   end
+
+  describe "probe connection isolation (GC-5857)" do
+    test "health probe sends connection: close" do
+      {port, request_task} = start_probe_server("ok")
+
+      assert Appliance.health("http://127.0.0.1:#{port}")
+
+      request = Task.await(request_task, 5_000)
+
+      assert request =~ "GET /health"
+      assert String.downcase(request) =~ "connection: close"
+    end
+
+    test "probe options isolate the request and bound the pool wait" do
+      opts = Appliance.probe_options(2_000)
+
+      assert opts[:headers] == [{"connection", "close"}]
+      assert opts[:pool_timeout] == 2_000
+      assert opts[:receive_timeout] == 2_000
+      assert opts[:retry] == false
+    end
+  end
+
+  defp start_probe_server(body) do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listen)
+
+    task =
+      Task.async(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen, 5_000)
+        request = recv_request_headers(socket, "")
+
+        response =
+          "HTTP/1.1 200 OK\r\n" <>
+            "content-type: text/plain\r\n" <>
+            "content-length: #{byte_size(body)}\r\n" <>
+            "connection: close\r\n\r\n" <> body
+
+        :gen_tcp.send(socket, response)
+        :gen_tcp.close(socket)
+        :gen_tcp.close(listen)
+        request
+      end)
+
+    {port, task}
+  end
+
+  defp recv_request_headers(socket, acc) do
+    if String.contains?(acc, "\r\n\r\n") do
+      acc
+    else
+      case :gen_tcp.recv(socket, 0, 5_000) do
+        {:ok, chunk} -> recv_request_headers(socket, acc <> chunk)
+        {:error, _} -> acc
+      end
+    end
+  end
 end
