@@ -298,25 +298,28 @@ defmodule LlmCore.LLM.Appliance do
     # Same totality rule as `error_message/2`: a server that puts a string or
     # nil where a choice/message object belongs must degrade to "no content",
     # not raise out of the parser.
-    choice = body |> Map.get("choices") |> first_map()
-    message = choice |> Map.get("message") |> as_map()
+    choice = first_map(Map.get(body, "choices"))
+    message = as_map(Map.get(choice, "message"))
     finish_reason = choice["finish_reason"]
 
     # Extract tool calls when the model requests them.
     # OpenAI-compatible local servers use finish_reason "tool_calls"
-    # and the same wire format.
+    # and the same wire format. The codec walks choices[0].message.tool_calls
+    # with `get_in/2`, so hand it the sanitized message, not the raw body.
     tool_calls =
       if finish_reason == "tool_calls" do
-        Codec.decode_tool_calls(body, :openai)
+        Codec.decode_tool_calls(%{"choices" => [%{"message" => message}]}, :openai)
       else
         nil
       end
 
+    raw_usage = as_map(Map.get(body, "usage"))
+
     usage =
       %{}
-      |> maybe_put(:prompt_tokens, get_in(body, ["usage", "prompt_tokens"]))
-      |> maybe_put(:completion_tokens, get_in(body, ["usage", "completion_tokens"]))
-      |> maybe_put(:total_tokens, get_in(body, ["usage", "total_tokens"]))
+      |> maybe_put(:prompt_tokens, raw_usage["prompt_tokens"])
+      |> maybe_put(:completion_tokens, raw_usage["completion_tokens"])
+      |> maybe_put(:total_tokens, raw_usage["total_tokens"])
 
     Response.new(
       content: content_string(message["content"]),
@@ -382,7 +385,11 @@ defmodule LlmCore.LLM.Appliance do
     content_string(content)
   end
 
-  defp extract_delta(%{"choices" => [%{"finish_reason" => _} | _]}), do: :done
+  # Intermediate SSE chunks carry `"finish_reason": null` (and a role-only or
+  # empty delta); only a non-null finish_reason ends the stream.
+  defp extract_delta(%{"choices" => [%{"finish_reason" => reason} | _]}) when is_binary(reason),
+    do: :done
+
   defp extract_delta(_), do: nil
 
   defp maybe_put(map, _key, nil), do: map

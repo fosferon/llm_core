@@ -44,6 +44,24 @@ defmodule LlmCore.LLM.ApplianceTest do
       assert {chunks, true} = Appliance.decode_stream_chunk(chunk)
       assert chunks == ["Hel", "lo"]
     end
+
+    # OpenAI-compatible servers send "finish_reason": null on every intermediate
+    # chunk, including role-only deltas; those must not end the stream early.
+    test "a null finish_reason on a role-only delta does not terminate the stream" do
+      chunk = """
+      data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}
+
+      data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}
+      """
+
+      assert {["Hi"], false} = Appliance.decode_stream_chunk(chunk)
+    end
+
+    test "a non-null finish_reason ends the stream" do
+      chunk = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n"
+
+      assert {[], true} = Appliance.decode_stream_chunk(chunk)
+    end
   end
 
   describe "discover/0" do
@@ -129,6 +147,46 @@ defmodule LlmCore.LLM.ApplianceTest do
     test "choices missing or nil yields empty content" do
       assert Appliance.build_response(%{"id" => "x"}, []).content == ""
       assert Appliance.build_response(%{"choices" => nil}, []).content == ""
+    end
+
+    test "finish_reason tool_calls with a string message yields no tool calls, not a raise" do
+      body = %{"choices" => [%{"message" => "garbage", "finish_reason" => "tool_calls"}]}
+      response = Appliance.build_response(body, [])
+
+      assert response.content == ""
+      assert response.tool_calls == []
+      assert response.metadata[:finish_reason] == "tool_calls"
+    end
+
+    test "a well-formed tool call is still decoded (no regression)" do
+      body = %{
+        "choices" => [
+          %{
+            "finish_reason" => "tool_calls",
+            "message" => %{
+              "content" => nil,
+              "tool_calls" => [
+                %{
+                  "id" => "call_1",
+                  "type" => "function",
+                  "function" => %{"name" => "lookup", "arguments" => "{\"q\":\"x\"}"}
+                }
+              ]
+            }
+          }
+        ]
+      }
+
+      response = Appliance.build_response(body, [])
+
+      assert [%{name: "lookup"}] = response.tool_calls
+    end
+
+    test "a non-object usage field is ignored instead of raising" do
+      for bad <- ["none", [], 7, nil] do
+        response = Appliance.build_response(%{"choices" => [], "usage" => bad}, [])
+        assert response.usage == %{}
+      end
     end
   end
 

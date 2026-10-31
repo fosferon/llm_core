@@ -18,7 +18,13 @@ All notable changes to this project will be documented in this file.
   exceeds the loaded context length (HTTP 400). The formatter is now total over
   the `"error"` value: an object with `"message"` or a bare string becomes the
   message, anything else falls back to the status text. `build_response/2`
-  likewise tolerates a non-object choice or message instead of raising.
+  likewise tolerates a non-object choice, message, `tool_calls` carrier or
+  `usage` field instead of raising.
+- `LlmCore.LLM.Appliance.decode_stream_chunk/1` treated any chunk carrying a
+  `"finish_reason"` key as the end of the stream, including the
+  `"finish_reason": null` that OpenAI-compatible servers put on every
+  intermediate chunk; a role-only first delta therefore ended the stream before
+  any content arrived. Only a non-null finish reason terminates the stream now.
 
 ## 0.9.1 — 2026-10-30
 
