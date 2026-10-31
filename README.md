@@ -319,7 +319,7 @@ See the [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) for 
 | Droid | CLI | Config-driven | `exec` subcommand, `--auto`, `--cwd` |
 | Pi CLI | CLI | Config-driven | `--print`, `--provider`, `--thinking` |
 | Kimi CLI | CLI | Config-driven | Agent-file YAML transform, final-message capture |
-| Codex CLI | CLI | Config-driven | `--full-auto`, file capture, sandbox bypass |
+| Codex CLI | CLI | Config-driven | `exec` with explicit sandbox mode, file capture, sandbox bypass |
 | Gemini CLI | CLI | Config-driven | Model selection |
 
 ## Documentation

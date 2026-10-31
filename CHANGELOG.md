@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- The bundled `codex_cli` provider passed `--full-auto` to `codex exec`, which
+  Codex CLI 0.164 rejects (`unexpected argument '--full-auto'`, exit 2), so
+  every unattended Codex dispatch failed before the prompt was sent. Unattended
+  runs now select the sandbox explicitly (`-s workspace-write`) and pass
+  `--skip-git-repo-check`, since a dispatcher's working directory is often not
+  a git checkout. The preflight no longer expects `--full-auto` in `--help`.
+
 ## 0.9.1 — 2026-10-30
 
 ### Fixed

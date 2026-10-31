@@ -253,7 +253,12 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       assert "--auto" in droid_args
       assert "high" in droid_args
-      assert "--full-auto" in codex_args
+      # codex exec ≥ 0.164 rejects --full-auto; unattended runs select the
+      # sandbox explicitly and skip the git-repo check for non-repo cwds.
+      refute "--full-auto" in codex_args
+      assert "--skip-git-repo-check" in codex_args
+      sandbox_at = Enum.find_index(codex_args, &(&1 == "-s"))
+      assert Enum.at(codex_args, sandbox_at + 1) == "workspace-write"
     end
 
     test "unknown opts are passed through as flags" do

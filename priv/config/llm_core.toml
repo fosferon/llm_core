@@ -332,7 +332,9 @@ stdin_hack = false
 # Codex supports writing the final response to a file, bypassing
 # stdout session noise (banners, progress indicators, etc.)
 output_file_flag = "--output-last-message"
-auto_approve_args = ["--full-auto"]
+# codex exec ≥ 0.164 has no --full-auto; unattended runs pick the sandbox
+# explicitly. --skip-git-repo-check: a dispatcher's cwd is often not a repo.
+auto_approve_args = ["-s", "workspace-write", "--skip-git-repo-check"]
 sandbox_bypass_args = ["--dangerously-bypass-approvals-and-sandbox"]
 install_hint = "Install with: npm install -g @openai/codex"
 
@@ -343,7 +345,7 @@ add_dir = "--add-dir"
 
 [providers.codex_cli.cli.preflight]
 help_args = ["exec", "--help"]
-expect_in_help = ["--full-auto", "--add-dir"]
+expect_in_help = ["--add-dir", "--skip-git-repo-check"]
 
 [providers.codex_cli.capabilities]
 streaming = true

@@ -22,7 +22,7 @@ These ship in `priv/config/llm_core.toml` and work out of the box when the binar
 | `droid` | `droid` | `exec` subcommand, `--auto high`, `--cwd`, `--worktree` |
 | `pi_cli` | `pi` | `--print`, `--provider`, `--thinking`, system prompt file |
 | `kimi_cli` | `kimi-cli` | Agent-file YAML transform, `--final-message-only`, output stripping |
-| `codex_cli` | `codex` | `exec` subcommand, `--full-auto`, file capture via `--output-last-message` |
+| `codex_cli` | `codex` | `exec` subcommand, `-s workspace-write --skip-git-repo-check` when unattended, file capture via `--output-last-message` |
 | `gemini_cli` | `gemini` | Model selection, standard CLI interface |
 
 To **override** a built-in, define a `[providers.<name>]` block with the same ID and `type = "cli"` in a project or global TOML override. Your definition replaces the default entirely.
