@@ -12,6 +12,13 @@ All notable changes to this project will be documented in this file.
   runs now select the sandbox explicitly (`-s workspace-write`) and pass
   `--skip-git-repo-check`, since a dispatcher's working directory is often not
   a git checkout. The preflight no longer expects `--full-auto` in `--help`.
+- `LlmCore.LLM.Appliance.classify_error/2` raised `FunctionClauseError` in
+  `Access.get/3` when an OpenAI-compatible server answered with a string-valued
+  error (`{"error": "…"}`), which is exactly how LM Studio reports a prompt that
+  exceeds the loaded context length (HTTP 400). The formatter is now total over
+  the `"error"` value: an object with `"message"` or a bare string becomes the
+  message, anything else falls back to the status text. `build_response/2`
+  likewise tolerates a non-object choice or message instead of raising.
 
 ## 0.9.1 — 2026-10-30
 

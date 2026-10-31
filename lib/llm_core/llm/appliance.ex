@@ -295,8 +295,11 @@ defmodule LlmCore.LLM.Appliance do
   end
 
   def build_response(body, _opts) do
-    choice = body["choices"] |> List.first() || %{}
-    message = choice["message"] || %{}
+    # Same totality rule as `error_message/2`: a server that puts a string or
+    # nil where a choice/message object belongs must degrade to "no content",
+    # not raise out of the parser.
+    choice = body |> Map.get("choices") |> first_map()
+    message = choice |> Map.get("message") |> as_map()
     finish_reason = choice["finish_reason"]
 
     # Extract tool calls when the model requests them.
@@ -353,10 +356,17 @@ defmodule LlmCore.LLM.Appliance do
   # ArgumentError on lists, so we guard with `is_map/1`. The bare-string body is
   # genuinely useful diagnostic text, so preserve it as the message rather than
   # letting the previous crash throw it away.
+  #
+  # The `"error"` VALUE must be total too. LM Studio reports a context overflow
+  # as HTTP 400 `{"error": "The number of tokens to keep from the initial prompt
+  # is greater than the context length…"}` — a string, not an object — and
+  # `get_in(body, ["error", "message"])` then calls `Access.get/3` on that string
+  # and raises FunctionClauseError, hiding the one message the operator needed.
   defp error_message(status, body) when is_map(body) do
-    case get_in(body, ["error", "message"]) do
-      nil -> "Appliance API error (status #{status})"
-      msg -> msg
+    case Map.get(body, "error") do
+      %{"message" => msg} when is_binary(msg) and byte_size(msg) > 0 -> msg
+      msg when is_binary(msg) and byte_size(msg) > 0 -> msg
+      _ -> "Appliance API error (status #{status})"
     end
   end
 
@@ -454,6 +464,12 @@ defmodule LlmCore.LLM.Appliance do
   defp schema_name(%{"title" => title}) when is_binary(title), do: title
   defp schema_name(%{title: title}) when is_binary(title), do: title
   defp schema_name(_), do: "appliance_schema"
+
+  defp first_map(list) when is_list(list), do: list |> List.first() |> as_map()
+  defp first_map(_), do: %{}
+
+  defp as_map(map) when is_map(map), do: map
+  defp as_map(_), do: %{}
 
   defp content_string(content) when is_binary(content), do: content
 

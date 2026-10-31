@@ -109,6 +109,29 @@ defmodule LlmCore.LLM.ApplianceTest do
     end
   end
 
+  describe "build_response/2 with malformed choices" do
+    test "a string where a choice object belongs yields empty content, not a raise" do
+      response = Appliance.build_response(%{"choices" => ["garbage"], "model" => "m"}, [])
+
+      assert response.content == ""
+      assert response.model == "m"
+      assert response.metadata[:finish_reason] == nil
+    end
+
+    test "a string where the message object belongs yields empty content" do
+      body = %{"choices" => [%{"message" => "garbage", "finish_reason" => "stop"}]}
+      response = Appliance.build_response(body, [])
+
+      assert response.content == ""
+      assert response.metadata[:finish_reason] == "stop"
+    end
+
+    test "choices missing or nil yields empty content" do
+      assert Appliance.build_response(%{"id" => "x"}, []).content == ""
+      assert Appliance.build_response(%{"choices" => nil}, []).content == ""
+    end
+  end
+
   describe "classify_error/2 with non-map bodies" do
     test "bare binary body preserves the diagnostic text" do
       error = Appliance.classify_error(500, "Model unloaded.")
@@ -137,6 +160,28 @@ defmodule LlmCore.LLM.ApplianceTest do
       error = Appliance.classify_error(500, "")
 
       assert error.message == "Appliance API error (status 500)"
+    end
+
+    # LM Studio reports a context overflow as 400 {"error": "<string>"}; the old
+    # get_in(body, ["error", "message"]) raised FunctionClauseError in Access.get/3
+    # on that string, so a prompt-too-long was logged as a parser crash.
+    test "map body with a string-valued error keeps the string as the message" do
+      msg =
+        "The number of tokens to keep from the initial prompt is greater than the context length"
+
+      error = Appliance.classify_error(400, %{"error" => msg})
+
+      assert %Error{type: :provider_error} = error
+      assert error.message == msg
+      assert error.details.status == 400
+      assert error.details.body == %{"error" => msg}
+    end
+
+    test "map body with a nil, list or empty-string error falls back to the status" do
+      for bad <- [nil, ["boom"], "", %{"code" => 7}, 42] do
+        error = Appliance.classify_error(400, %{"error" => bad})
+        assert error.message == "Appliance API error (status 400)"
+      end
     end
 
     test "map body still extracts the nested error message (no regression)" do
