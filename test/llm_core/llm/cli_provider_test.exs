@@ -258,7 +258,13 @@ defmodule LlmCore.LLM.CLIProviderTest do
       refute "--full-auto" in codex_args
       assert "--skip-git-repo-check" in codex_args
       sandbox_at = Enum.find_index(codex_args, &(&1 == "-s"))
+      prompt_at = Enum.find_index(codex_args, &(&1 == "ship it"))
+      assert is_integer(sandbox_at), "expected -s in #{inspect(codex_args)}"
+      assert is_integer(prompt_at)
       assert Enum.at(codex_args, sandbox_at + 1) == "workspace-write"
+      # Unattended args follow the `exec` subcommand and precede the prompt.
+      assert hd(codex_args) == "exec"
+      assert sandbox_at < prompt_at
     end
 
     test "unknown opts are passed through as flags" do
