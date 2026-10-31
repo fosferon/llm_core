@@ -182,6 +182,22 @@ defmodule LlmCore.LLM.ApplianceTest do
       assert [%{name: "lookup"}] = response.tool_calls
     end
 
+    test "a tool call whose function is a scalar decodes as the unknown call, not a raise" do
+      for bad_function <- ["lookup", 42, nil, ["x"]] do
+        body = %{
+          "choices" => [
+            %{
+              "finish_reason" => "tool_calls",
+              "message" => %{"tool_calls" => [%{"id" => "call_1", "function" => bad_function}]}
+            }
+          ]
+        }
+
+        response = Appliance.build_response(body, [])
+        assert [%{id: nil, name: "unknown", arguments: %{}}] = response.tool_calls
+      end
+    end
+
     test "a non-object usage field is ignored instead of raising" do
       for bad <- ["none", [], 7, nil] do
         response = Appliance.build_response(%{"choices" => [], "usage" => bad}, [])

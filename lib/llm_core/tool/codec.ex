@@ -171,7 +171,9 @@ defmodule LlmCore.Tool.Codec do
     }
   end
 
-  defp decode_openai_call(%{"id" => id, "function" => function}) do
+  # `function` must be an object; a scalar there would send `function["arguments"]`
+  # into Access.get/3 with no matching clause. Anything else is the unknown call.
+  defp decode_openai_call(%{"id" => id, "function" => function}) when is_map(function) do
     arguments = parse_arguments(function["arguments"])
 
     %Call{
@@ -209,7 +211,7 @@ defmodule LlmCore.Tool.Codec do
   # Private — Ollama
   # ---------------------------------------------------------------------------
 
-  defp decode_ollama_call(%{"function" => function}) do
+  defp decode_ollama_call(%{"function" => function}) when is_map(function) do
     %Call{
       id: nil,
       name: function["name"],
