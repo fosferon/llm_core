@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.3 — 2026-11-05
+
+### Fixed
+
+- Parallel tool dispatch is back. Tools whose resolver returns a dispatch
+  recipe run through the async `LlmCore.Agent.Pipeline.ToolDispatch` pipeline
+  again, so independent sub-calls overlap instead of running one at a time.
+  The old workaround that stopped the shared pipeline, slept 10 ms and
+  restarted it in sync mode is gone; it could kill another caller's in-flight
+  call.
+- Long tool calls are no longer cut off by ALF's 10 s default wait. The
+  agent loop accepts `:tool_timeout` (default 300 s) and passes it as an
+  explicit per-call ALF timeout. The budget is enforced around each sub-call;
+  exceeding it returns the bounded result
+  `Tool call timed out after Nms` backed by the typed reason
+  `{:timeout, ms}`.
+- Fan-out results are returned in the recipe's declared order even though
+  workers finish out of order.
+- `LlmCore.Memory.Hindsight.WriteBuffer` now traps exits, so a graceful
+  supervisor shutdown calls `terminate/2` and persists buffered retains.
+- `LlmCore.Agent.Registry` no longer falls back to the deleted
+  `LlmCore.LLM.Zai` module.
+- `LlmCore.LLM.CLIProvider` registers its active port when the caller passes
+  `execution_id:`, so `LlmCore.Executor.Control.lookup/1` can interrupt an
+  in-flight CLI call.
+
+### Changed
+
+- `:caller_default` is the documented neutral value for
+  `LlmCore.LLM.CLIProvider.Config.model_resolution`. It uses `default_model`
+  only when the caller passes no model. The old `:gc_default` value still
+  behaves identically and is accepted throughout 0.9.x; see Deprecated.
+- `prompt_transport = "stdin"` is now rejected by the config loader instead
+  of silently omitting the prompt. Use `"last"` or `"flagged"`.
+- Bundled provider `default_model` values are neutral placeholders
+  (`anthropic-model-id`, `openai-model-id`, and so on). Set a real model id
+  in your project or home layer, or pass `:model` per call. The bundled
+  `droid` entry no longer ships a model and uses `caller_default`, so it
+  passes a model only when the caller supplies one.
+- Documentation now matches the code: the exact telemetry event list
+  (no events were renamed in this release), required-key-only validation for
+  map/list schemas, project-layer-only hot reload, the actual HALT wiring,
+  the unsupported `"stdin"` transport, and the current module layout in both
+  architecture guides.
+- Internal project and tracker references were removed from shipped source,
+  tests and documentation.
+
+### Deprecated
+
+- `:gc_default` for `model_resolution` is a deprecated alias for
+  `:caller_default`. It behaves identically and will be removed in 0.10.
+- `DEVMAN_HOME` and `DEVMAN_CONFIG` are still read as fallbacks for
+  backward compatibility, but each emits one `Logger` warning per VM. Use
+  `LLM_CORE_HOME` and `LLM_CORE_PROJECT_CONFIG`; the old names will be
+  removed in 0.10.
+
 ## 0.9.2 — 2026-10-31
 
 ### Fixed
@@ -10,7 +66,7 @@ All notable changes to this project will be documented in this file.
   Codex CLI 0.164 rejects (`unexpected argument '--full-auto'`, exit 2), so
   every unattended Codex dispatch failed before the prompt was sent. Unattended
   runs now select the sandbox explicitly (`-s workspace-write`) and pass
-  `--skip-git-repo-check`, since a dispatcher's working directory is often not
+  `--skip-git-repo-check`, since a caller's working directory is often not
   a git checkout. The preflight no longer expects `--full-auto` in `--help`.
 - `LlmCore.LLM.Appliance.classify_error/2` raised `FunctionClauseError` in
   `Access.get/3` when an OpenAI-compatible server answered with a string-valued

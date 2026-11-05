@@ -1,7 +1,7 @@
 defmodule LlmCore.MixProject do
   use Mix.Project
 
-  @version "0.9.2"
+  @version "0.9.3"
   @source_url "https://github.com/fosferon/llm_core"
 
   def project do
@@ -14,7 +14,20 @@ defmodule LlmCore.MixProject do
       description: description(),
       package: package(),
       source_url: @source_url,
-      docs: docs()
+      docs: docs(),
+      aliases: aliases()
+    ]
+  end
+
+  defp aliases do
+    [
+      ci: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "test",
+        "docs",
+        "hex.build"
+      ]
     ]
   end
 
