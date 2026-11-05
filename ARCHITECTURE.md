@@ -1,117 +1,131 @@
 # LlmCore Architecture
 
-Provider-agnostic LLM orchestration library for Elixir. Every model call
-routes through llm_core — provider selection, structured output extraction,
-Hindsight semantic memory, circuit breakers, retries, and caching.
+Provider-agnostic LLM orchestration for Elixir. A request is normalised,
+routed to a provider, and returned as a `LlmCore.LLM.Response` (or a typed
+error). Optional layers add structured output, semantic memory, and an
+in-process tool-calling agent loop.
 
-## Request Flow
+## Request flow
 
 ```
-                          ┌──────────────────────────────────────────────┐
-                          │              LlmCore (Facade)               │
-                          │   send/3 · stream/3 · retain/2 · recall/2   │
-                          └────────────────┬─────────────────────────────┘
-                                           │
-                    ┌──────────────────────┤──────────────────────┐
-                    ▼                      ▼                      ▼
-           ┌───────────────┐     ┌─────────────────┐    ┌────────────────┐
-           │ InferencePipe │     │  RoutingPipeline │    │ MemoryPipeline │
-           │   (ALF)       │────▶│     (ALF)        │    │    (ALF)       │
-           └───────┬───────┘     └────────┬────────┘    └───────┬────────┘
-                   │                      │                     │
-                   │              ┌───────▼────────┐    ┌───────▼────────┐
-                   │              │  Router (GenSrv)│    │   Hindsight    │
-                   │              │  routing.yml +  │    │  REST client   │
-                   │              │  RoutingTable    │    │  write buffer  │
-                   │              └───────┬────────┘    │  circuit break  │
-                   │                      │             │  cache + retry  │
-                   │              ┌───────▼────────┐    └────────────────┘
-                   │              │ Agent.Registry  │
-                   │              │  (GenServer)    │
-                   │              └───────┬────────┘
-                   │                      │
-                   │           ┌──────────▼──────────┐
-                   │           │  Provider.Registry   │
-                   │           │  (ETS, from TOML)    │
-                   │           └──────────┬──────────┘
-                   │                      │
-                   ▼                      ▼
-           ┌──────────────────────────────────────────┐
-           │            LLM Provider Adapters          │
-           │                                           │
-           │  ┌──────────┐ ┌────────┐ ┌────────────┐  │
-           │  │ Anthropic │ │ OpenAI │ │   Ollama   │  │
-           │  │  (API)    │ │ (API)  │ │  (local)   │  │
-           │  └──────────┘ └────────┘ └────────────┘  │
-           │  ┌──────────┐ ┌────────┐ ┌────────────┐  │
-           │  │ClaudeCode│ │ Gemini │ │ Appliance  │  │
-           │  │  (CLI)   │ │ (CLI)  │ │  (local)   │  │
-           │  └──────────┘ └────────┘ └────────────┘  │
-           │  ┌──────────┐ ┌────────┐                  │
-           │  │   Z.ai   │ │ Codex  │                  │
-           │  │  (API)   │ │ (CLI)  │                  │
-           │  └──────────┘ └────────┘                  │
-           └──────────────────────────────────────────┘
+                         ┌──────────────────────────────────────┐
+                         │          LlmCore (facade)            │
+                         │ send/3 · stream/3 · retain/2 · ...   │
+                         └──────────────────┬───────────────────┘
+                                            │
+              ┌─────────────────────────────┼─────────────────────────────┐
+              ▼                             ▼                             ▼
+    ┌──────────────────┐          ┌──────────────────┐        ┌──────────────────┐
+    │ InferencePipeline│─────────▶│ RoutingPipeline  │        │ MemoryPipeline   │
+    │      (ALF)       │          │      (ALF)       │        │      (ALF)       │
+    └────────┬─────────┘          └────────┬─────────┘        └────────┬─────────┘
+             │                             │                           │
+             │                    ┌────────▼─────────┐        ┌────────▼─────────┐
+             │                    │      Router      │        │ Memory facade +  │
+             │                    │    (GenServer)   │        │ backend (HTTP)   │
+             │                    └────────┬─────────┘        └──────────────────┘
+             │                             │
+             │                    ┌────────▼─────────┐
+             │                    │ Agent.Registry   │
+             │                    │ Provider.Registry│
+             │                    │ (ETS from TOML)  │
+             │                    └────────┬─────────┘
+             ▼                             ▼
+    ┌─────────────────────────────────────────────────────┐
+    │                  Provider dispatch                   │
+    │  Anthropic · OpenAI-compatible · Ollama · Appliance  │
+    │  CLIProvider (config-driven CLI tools)               │
+    └─────────────────────────────────────────────────────┘
 ```
 
-## Core Subsystems
+## Core subsystems
 
 ### 1. Router (`LlmCore.Router`)
 
-A GenServer that resolves **task types** (e.g. `"coding"`, `"reasoning"`,
-`"planning"`) to fully-configured agent/provider pairs.
+A GenServer that resolves task types (`"coding"`, `"reasoning"`, ...) to a
+`LlmCore.Router.ResolvedRoute`.
 
-- Loads routing rules from `routing.yml` via `LlmCore.Config.Loader`
-- Stores the active `RoutingTable` in-process and syncs every 60 s
-- Responds to `:config_reloaded` messages from the file watcher
-- Delegates execution to `InferencePipeline` for `send/3` and `stream/3`
+- Loads routing rules from the merged TOML layers (`[routing]`) and from a
+  project `routing.yml`, which takes precedence for routing.
+- Keeps a routing table in GenServer state and refreshes it on
+  `{:config_reloaded, :routing}` plus a 60 s safety-net poll.
+- Delegates execution to `InferencePipeline` for `send/3` and `stream/3`.
 
-**Key structs:**
+Structs:
 
 | Struct | Purpose |
 |--------|---------|
-| `RouteEntry` | One routing rule: alias → provider, mode, capabilities |
-| `RoutingTable` | All rules + default, built from YAML or TOML |
-| `ResolvedRoute` | Final routing decision with hydrated `Agent` |
+| `RouteEntry` | One routing rule: alias, mode, capability requirements |
+| `RoutingTable` | Rules + optional default |
+| `ResolvedRoute` | Final decision with hydrated `Agent` |
 
-### 2. Provider System
+With no default in any layer, resolution returns
+`{:error, {:no_routing_default, %{task_type:, table_source:}}}` and emits
+`[:llm_core, :routing, :error]` unconditionally.
 
-#### Provider Behaviour (`LlmCore.LLM.Provider`)
+### 2. Provider system
 
-Every adapter implements five callbacks:
+#### Behaviour (`LlmCore.LLM.Provider`)
+
+Module providers implement:
 
 ```elixir
 @callback send(prompt(), opts())       :: {:ok, Response.t()} | {:error, Error.t()}
 @callback stream(prompt(), opts())     :: {:ok, Enumerable.t()} | {:error, Error.t()}
 @callback available?()                 :: boolean()
+@callback available?(auth :: map())    :: boolean()   # optional
 @callback capabilities()               :: capabilities()
-@callback provider_type()              :: :cli | :api | :local
+@callback provider_type()              :: :cli | :api | :local | :workflow
 ```
 
-Three provider types exist:
+`Provider.dispatch/3` handles both modules and structs. `CLIProvider` is a
+struct-based provider: its config is data, and it is called through
+`dispatch/3` rather than implementing the module callbacks.
 
-- **API** — Anthropic, OpenAI, Z.ai, Appliance (HTTP JSON)
-- **CLI** — Claude Code, Gemini CLI, Codex CLI (via `CLIPort`)
-- **Local** — Ollama, Appliance (OpenAI-compatible over localhost)
+Built-in adapters:
 
-#### Provider Registry (`LlmCore.Provider.Registry`)
+- `LlmCore.LLM.Anthropic` — Anthropic Messages API.
+- `LlmCore.LLM.OpenAI` — OpenAI-compatible chat completions; also used for
+  other compatible endpoints with a different `base_url` and key.
+- `LlmCore.LLM.Ollama` — local Ollama server.
+- `LlmCore.LLM.Appliance` — any OpenAI-compatible local appliance.
+- `LlmCore.LLM.CLIProvider` — one universal, TOML-configured CLI adapter.
+- `LlmCore.LLM.Native` — in-process loop over a configured provider cascade.
 
-Read-only ETS view over provider definitions loaded from TOML. Used by the
-routing pipeline for capability matching and alias suggestions.
+#### Registries
 
-#### Agent Registry (`LlmCore.Agent.Registry`)
+- `LlmCore.Provider.Registry` — ETS view of provider definitions loaded from
+  TOML (aliases, capabilities, availability).
+- `LlmCore.Agent.Registry` — GenServer mapping aliases to `Agent` structs.
+  TOML-registered agents win; a small fallback list covers provider modules
+  that are always compiled in.
+- `LlmCore.CLIProvider.Registry` — query surface over CLI configs (list,
+  available, fetch, resolve, capabilities).
 
-GenServer that maps human-friendly names (aliases) to `Agent` structs. On
-startup it auto-discovers providers from definitions or falls back to
-hard-coded entries. Explicitly registered agents take priority over
-auto-discovered ones.
+#### CLI providers
 
-### 3. ALF Pipelines
+CLI tools are declared entirely in TOML (`type = "cli"`). The adapter builds
+the command line from fields such as `binary`, `subcommand`, flags,
+`prompt_transport`, `system_prompt_transport`, output mode and preflight
+checks. Supported prompt transports are `"last"` and `"flagged"`; `"stdin"`
+is rejected by the loader because the process input pipe is not written to.
 
-llm_core uses [ALF](https://hexdocs.pm/alf) (Application Layer Framework) to
-compose processing stages into declarative, synchronous pipelines.
+Model selection follows `model_resolution`:
 
-#### Inference Pipeline (`LlmCore.Pipelines.InferencePipeline`)
+- `"caller_default"` (documented neutral value) — use `default_model` only
+  when the caller passes no model.
+- `"provider_runtime"` — let the CLI choose its own default.
+- `"explicit_only"` — only the caller's model.
+- `"gc_default"` — deprecated alias for `"caller_default"`, accepted through
+  0.9.x and removed in 0.10.
+
+### 3. ALF pipelines
+
+llm_core uses [ALF](https://hexdocs.pm/alf) as a composition DSL. The request
+pipelines run through `ALF.Manager` in synchronous mode; `ToolDispatch` runs
+asynchronously so recipe sub-calls can overlap.
+
+#### Inference (`LlmCore.Pipelines.InferencePipeline`)
 
 ```
 normalize_request → extract_response_format → resolve_route →
@@ -120,21 +134,17 @@ ensure_structured_output_capable → dispatch_provider →
 maybe_apply_structured_output → finalize_result
 ```
 
-Accepts strings, message lists, or `CommBus.Protocol.Packet` structs.
-Handles both `:send` and `:stream` modes.
+Accepts strings, message lists, or `CommBus.Protocol.Packet` structs, and
+handles both `:send` and `:stream`.
 
-#### Routing Pipeline (`LlmCore.Pipelines.RoutingPipeline`)
+#### Routing (`LlmCore.Pipelines.RoutingPipeline`)
 
 ```
-normalize_task_type → load_routing_table → resolve_entry →
-load_agent → ensure_capabilities → build_resolved_route →
-finalize_result
+normalize_task_type → load_routing_table → resolve_entry → load_agent →
+ensure_capabilities → build_resolved_route → finalize_result
 ```
 
-Resolves a task type string to a `ResolvedRoute` with full agent metadata.
-Used internally by the inference pipeline and available for standalone routing.
-
-#### Memory Pipeline (`LlmCore.Pipelines.MemoryPipeline`)
+#### Memory (`LlmCore.Pipelines.MemoryPipeline`)
 
 ```
 load_config → normalize_request → ensure_availability →
@@ -142,205 +152,271 @@ maybe_serve_from_cache → circuit_gate → execute_operation →
 maybe_cache_result → finalize_result
 ```
 
-Orchestrates all Hindsight operations (retain, recall, reflect) with
-caching, circuit breaker gating, retries, and write buffering.
+#### Agent iteration (`LlmCore.Agent.Pipeline.Iteration`)
 
-### 4. Structured Output
+```
+parse_tool_calls → validate_calls → budget_guard → dispatch_tools →
+inject_results → loop_decision
+```
 
-Lightweight JSON-mode extraction without heavy dependencies. The system
-supports three schema types:
+One iteration per LLM response. `LlmCore.Agent.Loop` owns the outer
+`Enum.reduce_while`, budgets, stop recovery and message accumulation.
 
-- **JSON Schema** — Provider-side `response_format` + post-response decode
-  and validation
-- **Custom** — User-supplied `(Response.t() -> {:ok, term()})` function
-- **Instructor** — Optional Instructor adapter (`LlmCore.Structured.InstructorAdapter`)
-  that delegates completions to the router
+#### Tool dispatch (`LlmCore.Agent.Pipeline.ToolDispatch`)
 
-**Validation pipeline** (`LlmCore.Structured.Validator`):
+Used when a resolver implements `dispatch_recipe/1` and returns a recipe for
+a tool:
 
-| Schema type | How it validates |
-|-------------|-----------------|
-| Function `(map -> result)` | Direct invocation |
-| Module with `validate/1` | Module callback |
-| Module with `changeset/2` | Ecto changeset apply |
-| Map `%{required: [...]}` | Key presence check |
-| List `[:key1, :key2]` | Required keys |
+```
+resolve_strategy → switch
+  ├─ passthrough → direct_resolve
+  └─ recipe → build_plan → execute_serial → fan_out_parallel →
+              execute_one_call(count: 3) → collect_results → compose_output
+```
 
-### 5. Hindsight Memory Integration
+The pipeline is started in async mode and shared by all callers. Every
+dispatch carries a deadline derived from the caller's `:tool_timeout`
+(default 300 s). Sub-calls run in monitored processes, return
+`{:error, {:timeout, ms}}` when the budget is exceeded, and parallel results
+are reordered to the recipe's declared order before composition. ALF is
+called with an explicit per-call timeout; its 10 s default is not used.
 
-Hindsight is an external semantic memory server (REST API, v0.4+). llm_core
-wraps it with a resilience stack:
+### 4. Agent loop
+
+`LlmCore.Agent.Loop.run/3` is an in-process loop over a user-supplied
+`llm_send_fn` and `resolve_tool`.
+
+- Iteration budget: `:max_iterations` (default 10).
+- Blank stops: `:max_blank_stops` (default 3, per iteration).
+- Narrated stops under `:terminal_required`: `:max_nonterminal_stops`
+  (default 3, per run).
+- Repeated tool errors: circuit breaker after 3 identical fingerprints.
+- Optional terminal tool and terminal-content extraction.
+- Tool dispatch timeout: `:tool_timeout` (default 300_000 ms).
+
+### 5. Structured output
+
+`LlmCore.Structured` extracts JSON and validates it with one of:
+
+| Schema | Validation |
+|--------|------------|
+| Function | Direct invocation |
+| Module | `validate/1`, `cast/1`, `from_map/1`, `new/1`, or Ecto `changeset/2` |
+| `%{required: [...], optional: [...]}` | Required-key presence; optional keys filter the result |
+| `[key, ...]` | Required-key presence |
+
+The built-in map/list schemas check **required keys only** — JSON Schema
+`type`, `properties`, ranges and nested constraints are not enforced. Use a
+function or module validator for full schema semantics. The optional
+`LlmCore.Structured.InstructorAdapter` compiles only when Instructor is
+available.
+
+### 6. Memory
+
+`LlmCore.Memory` is the facade; `LlmCore.Memory.Backend` is the contract.
+Backends: `hindsight_rest` (default), `foresight_http`, and
+`foresight_inprocess`. Hindsight uses its REST API, not MCP.
+
+The HTTP backends share:
 
 | Component | Purpose |
 |-----------|---------|
-| `Hindsight` | REST client (retain/recall/reflect/bank management) |
-| `WriteBuffer` | Batch-sends retains every 5 s or at 50 items; persists to disk on shutdown |
-| `CircuitBreaker` | Closed → Open after N failures; Half-open probe after reset timer |
-| `Cache` | TTL + LRU; stale-while-revalidate with background refresh |
-| `Retry` | Exponential backoff with jitter; classifies transient vs permanent errors |
-| `Discovery` | Probes localhost:8888 / 127.0.0.1:8888 for auto-discovery |
-| `Config` | Multi-level precedence: UI override > project > global > env > discovered |
+| `Hindsight.Cache` | TTL + LRU, stale-while-revalidate, single-flight refresh |
+| `Hindsight.CircuitBreaker` | Closed → open after failures; half-open probe |
+| `Hindsight.Retry` | Exponential backoff with jitter |
+| `Hindsight.WriteBuffer` | Batches retains; persists the buffer on graceful shutdown |
+| `Hindsight.Monitor` | Health checks and startup discovery |
+| `Hindsight.Discovery` | Probes localhost/127.0.0.1:8888 when no URL is configured |
 
-All operations flow through the Memory Pipeline which gates on circuit
-state and cache hits before touching the network.
+`WriteBuffer` traps exits so a supervisor shutdown calls `terminate/2` and
+the buffered retains are persisted. A hard kill still cannot be intercepted.
 
-### 6. Configuration System
+### 7. Configuration
 
-llm_core uses a layered TOML configuration with hot-reload:
+Layered TOML, later layers overriding earlier ones:
 
 ```
-<app_priv>/config/llm_core.toml          (bundled defaults)
-~/.llm_core/config/llm_core.toml         (global user config)
-<project>/.llm_core/llm_core.toml        (project config)
-$LLM_CORE_CONFIG                          (env override)
-opts[:path]                               (explicit path)
+<app_priv>/config/llm_core.toml          bundled defaults
+~/.llm_core/config/llm_core.toml         global user config
+<project>/.llm_core/llm_core.toml        project config
+$LLM_CORE_CONFIG                          env override
+opts[:path]                               explicit path
 ```
 
-Later layers deep-merge over earlier ones. Environment variable placeholders
-(`${VAR_NAME:default}`) are interpolated at load time.
+`${VAR:default}` placeholders are interpolated at load time. A project
+`routing.yml` overrides TOML routing.
 
 | Component | Responsibility |
-|-----------|---------------|
-| `Config.Loader` | Reads TOML/YAML, normalizes providers, applies config sections |
-| `Config.Store` | ETS-backed runtime store for routing tables and provider metadata |
-| `Config.Watcher` | `FileSystem`-based watcher with debounced reload |
-| `Config.Editor` | Read/write/update helpers for `llm_core.toml` mutation |
-| `Config.TomlWriter` | Deterministic TOML encoder for the editor |
+|-----------|----------------|
+| `Config.Loader` | Read TOML/YAML, normalise providers, apply sections |
+| `Config.Store` | Public ETS store for routing, providers, memory, telemetry |
+| `Config.Watcher` | Debounced watch of the **project** config directory only |
+| `Config.Editor` / `Config.TomlWriter` | Safe mutation and deterministic encoding |
 
-**Routing config** is separate (`routing.yml`) and supports both flat alias
-strings and rich maps with mode and capability requirements.
+Hot reload is scoped to `<project>/.llm_core/`. The global, bundled and
+explicit-path layers are read at boot or by an explicit reload. `DEVMAN_HOME`
+and `DEVMAN_CONFIG` remain accepted as deprecated fallbacks for
+`LLM_CORE_HOME` and `LLM_CORE_PROJECT_CONFIG`; each emits one warning per VM
+and will be removed in 0.10.
 
-### 7. Execution Control (`LlmCore.Executor.Control`)
+### 8. Execution control (`LlmCore.Executor.Control`)
 
-Minimal ETS registry that tracks active CLI ports by execution ID. This
-enables HALT semantics — consumers can interrupt in-flight CLI operations
-by looking up and closing the port.
+An ETS registry of active CLI ports keyed by execution id. `CLIProvider`
+registers a port when the caller passes `execution_id:`. A consumer can call
+`Control.lookup/1` and close that port to interrupt an in-flight CLI call.
+This is best-effort: closing the port signals EOF to the child process.
 
-### 8. Telemetry
+### 9. Telemetry
 
-All pipelines emit `:telemetry` events:
+Emitted events:
 
-- `[:llm_core, <pipeline>, :start]`
-- `[:llm_core, <pipeline>, :stop]` with duration
-- `[:llm_core, <pipeline>, :exception]` with error details
+```elixir
+[:llm_core, :inference_pipeline, :start | :stop | :exception]
+[:llm_core, :routing_pipeline, :start | :stop | :exception]
+[:llm_core, :memory_pipeline, :start | :stop | :exception]
+[:llm_core, :provider_dispatch, :start | :stop | :exception]
+[:llm_core, :routing, :error]            # unconditional
+[:llm_core, :config, :reloaded]
+[:llm_core, :agent, :loop_iteration]
+[:llm_core, :agent, :tool_call, :start | :stop]
+[:llm_core, :agent, :complete]
+[:llm_core, :tool_dispatch, :sub_call, :start]
+[:llm_core, :hindsight, :health]
+```
 
-`Telemetry.Settings` controls sampling rate and per-event enablement via
-TOML config. `Telemetry.Logger` is an optional handler that logs events.
+`Telemetry.Settings` controls span sampling and the optional logger.
+`Telemetry.Logger` attaches to the three request-pipeline and provider
+dispatch stop/exception events.
 
-### 9. Mix Tasks
+### 10. Mix tasks
 
 | Task | Purpose |
 |------|---------|
-| `mix llm_core.config.show` | Display merged config (providers, routing, memory, telemetry) |
-| `mix llm_core.config.set` | Mutate `llm_core.toml` entries and reload |
-| `mix llm_core.config.validate` | Validate TOML and print provider availability |
-| `mix llm_core.bench` | Run ALF routing/inference benchmarks |
+| `mix llm_core.config.show` | Display merged configuration |
+| `mix llm_core.config.set` | Mutate TOML and reload |
+| `mix llm_core.config.validate` | Validate TOML and availability |
+| `mix llm_core.bench` | Routing/inference benchmarks |
 
-## Module Index
+## Module index
 
 ```
 lib/
 ├── llm_core.ex                          # Public facade
 ├── llm_core/
-│   ├── application.ex                   # OTP application / supervision tree
+│   ├── application.ex                   # Supervision tree
 │   ├── agent.ex                         # Agent struct + name validation
-│   ├── paths.ex                         # Path resolution helpers
-│   ├── telemetry.ex                     # Telemetry span helper
+│   ├── paths.ex                         # Path helpers (env overrides)
+│   ├── telemetry.ex                     # Span helper
 │   ├── structured.ex                    # Structured output dispatcher
 │   ├── agent/
-│   │   └── registry.ex                  # Agent GenServer registry
+│   │   ├── context.ex                   # Iteration context
+│   │   ├── loop.ex                      # Outer agent loop
+│   │   ├── registry.ex                  # Agent GenServer
+│   │   ├── components/                  # Parse, validate, dispatch, inject,
+│   │   │                                # decision, budget guard
+│   │   ├── pipeline/
+│   │   │   ├── iteration.ex             # Per-iteration ALF pipeline
+│   │   │   └── tool_dispatch.ex         # Recipe dispatch ALF pipeline
+│   │   └── tool_dispatch/
+│   │       ├── event.ex                 # Dispatch event
+│   │       ├── execution.ex             # Bounded sub-call runner
+│   │       └── components/              # Recipe stages and composers
+│   ├── cli_provider/
+│   │   └── registry.ex                  # CLI config query surface
 │   ├── config/
-│   │   ├── loader.ex                    # TOML/YAML loader + normalizer
-│   │   ├── store.ex                     # ETS runtime config store
-│   │   ├── watcher.ex                   # File-change watcher
-│   │   ├── editor.ex                    # Config file mutation helpers
-│   │   └── toml_writer.ex              # TOML encoder
+│   │   ├── loader.ex                    # TOML/YAML loader + normaliser
+│   │   ├── store.ex                     # ETS runtime store
+│   │   ├── watcher.ex                   # Project-layer file watcher
+│   │   ├── editor.ex                    # Config mutation helpers
+│   │   └── toml_writer.ex               # TOML encoder
 │   ├── execution/
-│   │   └── control.ex                   # CLI port tracking for HALT
+│   │   └── control.ex                   # Active CLI port registry
 │   ├── llm/
-│   │   ├── provider.ex                  # Provider behaviour definition
-│   │   ├── response.ex                  # Unified response struct
-│   │   ├── error.ex                     # Unified error struct
-│   │   ├── messages.ex                  # Prompt normalization helpers
-│   │   ├── sse_parser.ex               # Server-Sent Events parser
-│   │   ├── cli_port.ex                 # Port-based CLI execution
-│   │   ├── anthropic.ex                # Anthropic Claude API adapter
-│   │   ├── openai.ex                   # OpenAI-compatible API adapter
-│   │   ├── ollama.ex                   # Ollama local adapter
-│   │   ├── appliance.ex               # Generic local appliance adapter
-│   │   ├── claude_code.ex             # Claude Code CLI adapter
-│   │   ├── gemini_cli.ex             # Gemini CLI adapter
-│   │   ├── codex_cli.ex              # Codex CLI adapter
-│   │   └── zai.ex                     # Z.ai API adapter
+│   │   ├── provider.ex                  # Behaviour + unified dispatch
+│   │   ├── response.ex / error.ex       # Unified result structs
+│   │   ├── messages.ex                  # Prompt normalisation
+│   │   ├── sse_parser.ex                # Server-Sent Events parser
+│   │   ├── cli_port.ex                  # Port helpers used by consumers
+│   │   ├── cli_provider.ex              # Universal TOML CLI adapter
+│   │   ├── anthropic.ex                 # Anthropic API
+│   │   ├── openai.ex                    # OpenAI-compatible API
+│   │   ├── ollama.ex                    # Ollama
+│   │   ├── appliance.ex                 # Local OpenAI-compatible appliance
+│   │   ├── native.ex                    # In-process cascade loop
+│   │   └── native/{config,router}.ex    # Native config + candidate routing
 │   ├── memory/
-│   │   ├── hindsight.ex               # Hindsight REST client
-│   │   └── hindsight/
-│   │       ├── supervisor.ex          # Hindsight supervision tree
-│   │       ├── config.ex             # Multi-level config precedence
-│   │       ├── cache.ex              # TTL + LRU cache
-│   │       ├── circuit_breaker.ex    # Circuit breaker state machine
-│   │       ├── retry.ex              # Exponential backoff retry
-│   │       ├── write_buffer.ex       # Batch write-behind buffer
-│   │       └── discovery.ex          # Endpoint auto-discovery
+│   │   ├── memory facade + backend contract
+│   │   ├── backend/                     # hindsight_rest, foresight_http,
+│   │   │                                # foresight_in_process
+│   │   ├── config.ex                    # Backend selection
+│   │   └── hindsight/                   # cache, circuit breaker, retry,
+│   │                                    # write buffer, monitor, discovery
 │   ├── pipelines/
-│   │   ├── inference_pipeline.ex      # Request → provider → response
-│   │   ├── routing_pipeline.ex        # Task type → resolved route
-│   │   └── memory_pipeline.ex         # Hindsight operation orchestration
+│   │   ├── inference_pipeline.ex
+│   │   ├── routing_pipeline.ex
+│   │   └── memory_pipeline.ex
 │   ├── provider/
-│   │   ├── definition.ex              # Provider metadata struct
-│   │   └── registry.ex               # ETS provider lookup
+│   │   ├── definition.ex                # Provider metadata
+│   │   └── registry.ex                  # ETS provider lookup
 │   ├── router/
-│   │   ├── router.ex                  # Router GenServer
-│   │   └── structs.ex                # RouteEntry, RoutingTable, ResolvedRoute
+│   │   ├── router.ex                    # Router GenServer
+│   │   └── structs.ex                   # Route structs
 │   ├── structured/
-│   │   ├── instructor_adapter.ex     # Instructor integration adapter
-│   │   ├── json_mode.ex             # JSON decode/enforce helpers
-│   │   └── validator.ex             # Schema validation dispatcher
-│   └── telemetry/
-│       ├── settings.ex               # Telemetry config (sample rate, etc.)
-│       └── logger.ex                 # Telemetry → Logger handler
+│   │   ├── instructor_adapter.ex
+│   │   ├── json_mode.ex
+│   │   └── validator.ex
+│   ├── telemetry/
+│   │   ├── settings.ex
+│   │   └── logger.ex
+│   └── tool/
+│       ├── codec.ex                     # Tool-call codecs
+│       └── validator.ex                 # Tool-call validation
 └── mix/tasks/
-    ├── llm_core.bench.ex             # Benchmark mix task
-    ├── llm_core.config.set.ex        # Config mutation mix task
-    ├── llm_core.config.show.ex       # Config display mix task
-    └── llm_core.config.validate.ex   # Config validation mix task
+    ├── llm_core.bench.ex
+    ├── llm_core.config.set.ex
+    ├── llm_core.config.show.ex
+    └── llm_core.config.validate.ex
 ```
 
-## Supervision Tree
+## Supervision tree
 
 ```
 LlmCore.Supervisor (one_for_one)
-├── LlmCore.Config.Store          (ETS owner)
-├── LlmCore.Agent.Registry        (GenServer)
-├── LlmCore.Router                (GenServer)
-├── LlmCore.Config.Watcher        (GenServer, optional)
-└── LlmCore.Memory.Hindsight.Supervisor (one_for_one, optional)
-    ├── Hindsight.Cache            (GenServer + ETS)
-    ├── Hindsight.WriteBuffer      (GenServer)
-    ├── Hindsight.CircuitBreaker   (GenServer)
-    └── Task (startup_sequence)    (discovery + prefetch + health monitor)
+├── LlmCore.Config.Store                 (ETS owner)
+├── LlmCore.Agent.Registry               (GenServer)
+├── LlmCore.Router                       (GenServer)
+├── LlmCore.Config.Watcher               (GenServer, optional)
+└── LlmCore.Memory.Hindsight.Supervisor  (optional, when memory is enabled)
+    ├── Cache                            (GenServer + ETS)
+    ├── WriteBuffer                      (GenServer; traps exits)
+    ├── CircuitBreaker                   (GenServer)
+    ├── Task.Supervisor                  (memory background work)
+    └── Monitor                          (health checks)
 ```
 
-## Key Design Decisions
+Boot is transactional: if provider/routing loading or the memory subtree
+fails to start, the supervisor is stopped and `{:error, reason}` is returned.
 
-1. **ALF pipelines over GenServer chains** — Declarative stage composition
-   with built-in telemetry, easier to reason about and extend.
+## Design decisions
 
-2. **Provider behaviour, not protocol** — Behaviours give compile-time
-   checking and clear callback contracts; protocols would add dispatch
-   overhead without benefit for a fixed adapter set.
+1. **ALF as a composition DSL** — stage lists are declarative and testable.
+   The request pipelines use synchronous ALF calls; `ToolDispatch` uses the
+   async pipeline with an explicit per-call timeout.
 
-3. **ETS for hot config** — Routing tables and provider metadata live in ETS
-   for lock-free reads. The file watcher triggers reloads into ETS.
+2. **Behaviour plus struct dispatch** — module providers use a behaviour for
+   compile-time contracts; config-driven CLI providers are structs routed by
+   `Provider.dispatch/3`, so adding a CLI is a TOML edit.
 
-4. **Write-behind buffer for Hindsight** — Retain operations are
-   non-blocking; the buffer batches and flushes, persisting to disk on
-   shutdown to prevent data loss.
+3. **ETS for hot config** — routing and provider metadata are read without a
+   GenServer round-trip. The watcher reloads the project layer into ETS.
 
-5. **Circuit breaker + cache + retry** — Three-layer resilience ensures
-   Hindsight failures don't cascade into the main request path. Stale cache
-   values are served while background refreshes happen.
+4. **Explicit failure over guessed defaults** — no routing default is
+   shipped. Missing configuration returns a typed error and emits an
+   unconditional routing event.
 
-6. **CLI providers via Port** — Using Erlang ports instead of System.cmd
-   enables streaming output capture and HALT/interrupt semantics for
-   long-running CLI operations.
+5. **Resilience without hiding failures** — cache, circuit breaker and retry
+   sit around memory I/O; persistent failures surface as typed errors.
+
+6. **Bounded tool dispatch** — recipe sub-calls run concurrently, are bounded
+   by the caller's timeout, and return typed timeout errors instead of
+   hanging the loop or restarting a shared pipeline.

@@ -43,7 +43,7 @@ binary = "my-tool"                     # required — must be in PATH
 subcommand = "exec"                    # optional subcommand prepended to args
 default_timeout = 60000                # ms (default: 1_800_000 = 30 min)
 prompt_position = "last"              # "last" or "flagged"
-prompt_transport = "last"             # "last", "flagged", or "stdin"
+prompt_transport = "last"             # "last" or "flagged"
 system_prompt_transport = "file_flag"  # "flag", "file_flag", "inline_fallback", or "unsupported"
 install_hint = "pip install my-tool"   # shown when binary is missing
 prefix_args = ["--no-interactive"]     # always prepended
@@ -79,13 +79,23 @@ cost_tier = "cli"
 | `subcommand` | No | `nil` | Subcommand prepended before flags (e.g. `"exec"` for `droid exec`) |
 | `default_timeout` | No | `1800000` (30 min) | Process timeout in milliseconds |
 | `default_model` | No | `nil` | Model string passed to `--model` |
-| `model_resolution` | No | `"provider_runtime"` | How model selection works: `"gc_default"`, `"provider_runtime"`, or `"explicit_only"` |
+| `model_resolution` | No | `"caller_default"` when `default_model` is set, else `"provider_runtime"` | How model selection works: `"caller_default"`, `"provider_runtime"`, or `"explicit_only"`. `"gc_default"` is a deprecated alias for `"caller_default"` |
 | `prompt_position` | No | `"last"` | Where the prompt goes: `"last"` (end of args) or `"flagged"` (after `prompt_flag`) |
 | `prompt_flag` | Conditional | `nil` | Required when `prompt_position = "flagged"` (e.g. `"-p"` for Claude) |
-| `prompt_transport` | No | follows `prompt_position` | Semantic transport: `"last"`, `"flagged"`, or `"stdin"` |
+| `prompt_transport` | No | follows `prompt_position` | Semantic transport: `"last"` or `"flagged"`. `"stdin"` is rejected: the CLI stdin pipe is not wired |
 | `stdin_hack` | No | `false` | Wrap with `/bin/sh -c ... < /dev/null` (needed by Claude CLI) |
 | `prefix_args` | No | `[]` | Arguments always prepended (e.g. `["--print"]`) |
 | `install_hint` | No | `nil` | Human-readable message shown when binary is not found |
+
+### Model resolution
+
+- `"caller_default"` — use `default_model` only when the caller did not pass
+  `:model` (or a resolved runtime model). This is the documented neutral value.
+- `"provider_runtime"` — never inject `default_model`; let the CLI choose its
+  own runtime default.
+- `"explicit_only"` — use only what the caller passes.
+- `"gc_default"` — **deprecated** alias for `"caller_default"`. It is still
+  accepted and behaves identically; it will be removed in 0.10.
 
 ### Automation Args
 
@@ -98,6 +108,12 @@ These three profiles let callers control the CLI's autonomy level:
 | `sandbox_bypass_args` | Disable approval/sandbox entirely (e.g. `["--dangerously-bypass-approvals-and-sandbox"]`) |
 
 All are appended to the invocation only when the corresponding option is `true` in the dispatch call.
+
+### Prompt transport
+
+`"last"` appends the prompt as the final argument. `"flagged"` places it after
+`prompt_flag`. `"stdin"` is not supported: the process input pipe is not
+written to, so the loader rejects it rather than silently dropping the prompt.
 
 ### System Prompt Transport
 

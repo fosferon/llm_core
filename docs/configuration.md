@@ -27,6 +27,12 @@ The project config directory can be overridden entirely with `LLM_CORE_PROJECT_C
 The loader keeps a normalized snapshot inside `LlmCore.Config.Store` so the
 router, provider registry, and memory pipelines can react to hot reload events.
 
+Hot reload is scoped to the **project layer** (`<project_root>/.llm_core/`):
+`LlmCore.Config.Watcher` watches that directory only. Edits to the global
+`~/.llm_core/config/` layer, the bundled `priv/` layer, or `LLM_CORE_CONFIG`
+are picked up by an explicit reload (for example `mix llm_core.config.set`,
+which reloads by default) or by restarting the application.
+
 ## TOML schema highlights
 
 ```toml
@@ -34,7 +40,7 @@ router, provider registry, and memory pipelines can react to hot reload events.
 module = "LlmCore.LLM.Anthropic"
 type = "cloud"
 aliases = ["claude", "claude-sonnet"]
-default_model = "claude-3-sonnet"
+default_model = "your-anthropic-model"
 cost_tier = "premium"
 
 [providers.anthropic.auth]
@@ -110,7 +116,7 @@ default_timeout = 60000               # ms, default 1_800_000
 default_model = "v1"                  # fallback if not set at provider level
 prompt_position = "last"              # "last" or "flagged"
 prompt_flag = "-p"                    # required when prompt_position = "flagged"
-prompt_transport = "flagged"          # "last", "flagged", or "stdin"
+prompt_transport = "flagged"          # "last" or "flagged"
 system_prompt_transport = "file_flag" # "flag", "file_flag", "inline_fallback", "unsupported"
 cwd_flag = "--cwd"                    # optional
 add_dir_flag = "--add-dir"            # optional
@@ -257,6 +263,17 @@ All backends implement `LlmCore.Memory.Backend` and are reached through the
 `LlmCore.Memory` facade (`LlmCore.retain/2`, `LlmCore.recall/2`,
 `LlmCore.reflect/2`).
 
+## Deprecated environment variables
+
+`DEVMAN_HOME` and `DEVMAN_CONFIG` are still read as fallbacks for backward
+compatibility, but they are deprecated and will be removed in 0.10.0. When
+read, llm_core logs one warning per VM. Use:
+
+| Deprecated | Replacement |
+|------------|-------------|
+| `DEVMAN_HOME` | `LLM_CORE_HOME` |
+| `DEVMAN_CONFIG` | `LLM_CORE_PROJECT_CONFIG` |
+
 ## Mix task helpers
 
 ### Inspecting configuration
@@ -300,7 +317,7 @@ aliases = ["anthropic", "claude"]   # ← agents registered under these
 
 [providers.anthropic.agent]
 name = "my-claude"                  # ← NOT used as a registration key
-config = {model = "claude-3-5-sonnet"}
+config = {model = "your-anthropic-model"}
 ```
 
 With the above config:

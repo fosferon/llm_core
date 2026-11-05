@@ -1,271 +1,350 @@
 # llm_core Architecture
 
-This document describes the internal architecture of llm_core, a provider-agnostic
-LLM orchestration library for Elixir.
+This guide describes the internals of llm_core, a provider-agnostic LLM
+orchestration library for Elixir. See the module documentation for the full
+public API.
 
 ---
 
 ## Overview
 
-llm_core provides shared LLM infrastructure:
+```
+┌──────────────────────────────────────────────────────────────┐
+│                          llm_core                            │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │  Providers   │  │    Router    │  │      Memory        │  │
+│  │  (adapters)  │  │  (ALF + ETS) │  │  (HTTP backends)   │  │
+│  └──────────────┘  └──────────────┘  └────────────────────┘  │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │   Agent      │  │    Config    │  │    Telemetry       │  │
+│  │   Loop       │  │  (TOML/ETS)  │  │  (spans/events)    │  │
+│  └──────────────┘  └──────────────┘  └────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+```
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      llm_core                               │
-│                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │  Providers  │  │   Router    │  │    Hindsight        │ │
-│  │  (ALF)      │  │   (ALF)     │  │    (Resilient)      │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-│                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │  Structured │  │   Config    │  │    Telemetry        │ │
-│  │  Output     │  │   (Hot)     │  │    (Observable)     │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
+The public facade (`LlmCore`) delegates to `LlmCore.Router` for inference and
+`LlmCore.Memory` for semantic memory. Everything else is an internal
+subsystem with module documentation.
 
 ---
 
-## ALF Pipelines
+## ALF pipelines
 
-The library uses [ALF](https://github.com/antonmi/alf) (Antonmi's Flow-based
-Framework) for composable, observable data pipelines. ALF provides:
+[ALF](https://github.com/antonmi/alf) is used as a composition DSL. A pipeline
+is a list of stage functions over a context struct; stages short-circuit on
+`status: :error`.
 
-- **Composable stages** - Each transformation is isolated
-- **Streaming support** - `stream/2` for lazy evaluation
-- **Observability** - Built-in telemetry hooks
-- **Testability** - `sync: true` for deterministic testing
-- **Backpressure** - GenStage-based flow control
+### Inference pipeline
 
-### Inference Pipeline
-
-The main pipeline for sending prompts to LLM providers:
+`LlmCore.Pipelines.InferencePipeline`:
 
 ```
-validate_request
-     ↓
-resolve_provider  ←── Router (task_type → provider)
-     ↓
-check_availability ←── Provider.available?()
-     ↓
-┌─[switch]────────────────────────────────────┐
-│  :streaming → stream_stage (yield chunks)   │
-│  :blocking  → send_stage (wait for full)    │
-└─────────────────────────────────────────────┘
-     ↓
-normalize_response ←── Provider-specific → Response.t()
-     ↓
-[optional] extract_structured ←── Schema validation
-     ↓
-emit_telemetry
+normalize_request
+  ↓
+extract_response_format
+  ↓
+resolve_route            ← Router / RoutingPipeline
+  ↓
+prepare_provider_opts
+  ↓
+ensure_streaming_capable
+  ↓
+ensure_structured_output_capable
+  ↓
+dispatch_provider        ← LlmCore.LLM.Provider.dispatch/3
+  ↓
+maybe_apply_structured_output
+  ↓
+finalize_result
 ```
 
-### Routing Pipeline
+Both blocking and streaming requests use the same pipeline; the mode selects
+the dispatch path. `CommBus.Protocol.Packet` inputs are unpacked before
+normalisation.
 
-Resolves which provider and model to use for a given task:
+### Routing pipeline
 
-```
-parse_task_type
-     ↓
-load_routing_config ←── Config.Store (ETS)
-     ↓
-match_rules ←── Priority-ordered rule evaluation
-     ↓
-┌─[switch]────────────────────────────────────┐
-│  {:ok, route} → resolve_agent               │
-│  {:error, _}  → :no_routing_default / error │
-└─────────────────────────────────────────────┘
-     ↓
-build_resolved_route ←── ResolvedRoute.t()
-```
-
-### Memory Pipeline (Hindsight)
-
-Handles semantic memory operations with resilience:
+`LlmCore.Pipelines.RoutingPipeline`:
 
 ```
-┌─[switch: operation]────────────────────────────┐
-│  :retain  → validate_content → buffer_write    │
-│  :recall  → check_cache → query_or_fetch       │
-│  :reflect → check_cache → insight_query        │
-└────────────────────────────────────────────────┘
-     ↓
-circuit_breaker_gate ←── Allow/Block based on health
-     ↓
-┌─[composer: retry_state]────────────────────────┐
-│  attempt_operation                             │
-│  on_failure → exponential_backoff → retry      │
-│  on_success → update_cache → return            │
-└────────────────────────────────────────────────┘
-     ↓
-normalize_result
+normalize_task_type
+  ↓
+load_routing_table       ← Config.Store or merged config layers
+  ↓
+resolve_entry            ← task rule, else routing.default
+  ↓
+load_agent               ← Agent.Registry
+  ↓
+ensure_capabilities
+  ↓
+build_resolved_route
+  ↓
+finalize_result
 ```
+
+With no rule and no default, the result is
+`{:error, {:no_routing_default, %{task_type:, table_source:}}}`.
+`RoutingPipeline.route/2` emits `[:llm_core, :routing, :error]`
+unconditionally, including when span sampling is off.
+
+### Memory pipeline
+
+`LlmCore.Pipelines.MemoryPipeline`:
+
+```
+load_config
+  ↓
+normalize_request
+  ↓
+ensure_availability
+  ↓
+maybe_serve_from_cache
+  ↓
+circuit_gate
+  ↓
+execute_operation
+  ↓
+maybe_cache_result
+  ↓
+finalize_result
+```
+
+Retain operations can go through the write-behind buffer; recall/reflect use
+the backend directly with cache and retry around them.
+
+### Agent iteration pipeline
+
+`LlmCore.Agent.Pipeline.Iteration`:
+
+```
+parse_tool_calls → validate_calls → budget_guard → dispatch_tools →
+inject_results → loop_decision
+```
+
+The outer `LlmCore.Agent.Loop` owns iteration budgets, blank/narrated stop
+recovery, the repeated-error circuit breaker and message accumulation.
+
+### Tool dispatch pipeline
+
+`LlmCore.Agent.Pipeline.ToolDispatch` handles tools whose resolver returns a
+dispatch recipe:
+
+```
+resolve_strategy → switch
+  ├─ passthrough → direct_resolve
+  └─ recipe → build_plan → execute_serial → fan_out_parallel →
+              execute_one_call(count: 3) → collect_results → compose_output
+```
+
+This is the only pipeline that runs asynchronously. It is a shared singleton:
+callers start it in async mode and never stop or restart it. `DispatchTools`
+passes a per-call ALF timeout derived from the caller's `:tool_timeout`
+(default 300 s), so ALF's 10 s default does not cut long calls. Sub-calls run
+in monitored processes, time out with `{:error, {:timeout, ms}}`, and parallel
+results are reordered to the recipe's declared order.
 
 ---
 
-## Provider System
+## Provider system
 
-### Behaviour Contract
+### Behaviour contract
 
-All providers implement `LlmCore.LLM.Provider`:
+Module providers implement `LlmCore.LLM.Provider`:
 
 ```elixir
-@callback send(prompt(), opts()) :: {:ok, Response.t()} | {:error, Error.t()}
-@callback stream(prompt(), opts()) :: {:ok, Enumerable.t()} | {:error, Error.t()}
-@callback available?() :: boolean()
-@callback capabilities() :: capabilities()
-@callback provider_type() :: :local | :api | :cli
+@callback send(prompt(), opts())       :: {:ok, Response.t()} | {:error, Error.t()}
+@callback stream(prompt(), opts())     :: {:ok, Enumerable.t()} | {:error, Error.t()}
+@callback available?()                 :: boolean()
+@callback available?(auth :: map())    :: boolean()   # optional
+@callback capabilities()               :: capabilities()
+@callback provider_type()              :: :cli | :api | :local | :workflow
 ```
 
-### Supported Providers
+`LlmCore.LLM.Provider.dispatch/3` accepts a module, a `%CLIProvider{}` or any
+struct with a `send/3` function. This is how config-driven CLI providers fit
+without implementing the module callbacks.
+
+### Built-in adapters
 
 | Provider | Type | Module |
 |----------|------|--------|
 | Anthropic | `:api` | `LlmCore.LLM.Anthropic` |
-| OpenAI | `:api` | `LlmCore.LLM.OpenAI` |
+| OpenAI-compatible | `:api` | `LlmCore.LLM.OpenAI` |
 | Ollama | `:local` | `LlmCore.LLM.Ollama` |
-| Claude Code | `:cli` | `LlmCore.LLM.ClaudeCode` |
-| Gemini CLI | `:cli` | `LlmCore.LLM.GeminiCli` |
+| Appliance | `:local` | `LlmCore.LLM.Appliance` |
+| CLI tools | `:cli` | `LlmCore.LLM.CLIProvider` |
+| Native loop | `:api` | `LlmCore.LLM.Native` |
 
-### Provider Registry
+### Provider and CLI registries
 
-Providers are registered via TOML configuration. There are two kinds:
+- `LlmCore.Provider.Registry` — ETS metadata for all providers loaded from
+  TOML; used for alias lookup and capability matching.
+- `LlmCore.Agent.Registry` — alias → `Agent` mapping. TOML entries win; a
+  fallback list covers the always-compiled provider modules.
+- `LlmCore.CLIProvider.Registry` — list/available/fetch/resolve/capabilities
+  over CLI configs.
 
-#### Module providers (`provider_kind: :module`)
-- `module` - The Elixir module implementing the `Provider` behaviour
-- `aliases` - Names used by routing rules
-- `auth.api_key_env` - Environment variable for API key
-- `cost_tier` - Used for error suggestions and routing decisions
+### CLI providers
 
-#### CLI providers (`provider_kind: :cli`)
-- `type = "cli"` - No module required
-- `[providers.<id>.cli]` - CLI-specific configuration (binary, flags, transports)
-- Config-driven: new CLI providers are added via TOML, no Elixir code needed
-- Built-in providers (claude_code, droid, pi_cli, kimi_cli, codex_cli, gemini_cli)
-  work without config; TOML entries with the same ID override them
-- Availability is determined by binary presence in PATH
+CLI providers are data, not modules. TOML controls the binary, subcommand,
+flags, prompt transport, system-prompt transport, output capture, preflight
+and automation profiles. `prompt_transport` supports `"last"` and
+`"flagged"`; `"stdin"` is rejected by the loader because the CLI stdin pipe is
+not written to.
 
-### CLI Provider Registry
+Model selection is controlled by `model_resolution`:
 
-`LlmCore.CLIProvider.Registry` provides a dedicated query surface for CLI
-providers. It merges built-in definitions with TOML-configured ones (TOML wins
-on conflict) and exposes:
-
-- `list/0` — all known CLI providers with structured metadata
-- `available/0` — only those with binary in PATH
-- `fetch/1` — by atom ID or string alias
-- `resolve/1` — returns a ready-to-use `%CLIProvider{}` struct
-- `capabilities/1` — introspect provider capabilities
-
-This is the recommended API for downstream apps that need to discover or select
-CLI providers dynamically, replacing hard-coded provider lists.
+- `"caller_default"` — documented neutral value; use `default_model` only
+  when the caller passes no model.
+- `"provider_runtime"` — let the CLI choose.
+- `"explicit_only"` — only the caller's model.
+- `"gc_default"` — deprecated alias for `"caller_default"`, accepted in
+  0.9.x and removed in 0.10.
 
 ---
 
-## Structured Output
+## Structured output
 
-`LlmCore.Structured` provides lightweight structured data extraction from LLM
-responses without heavy dependencies:
+`LlmCore.Structured` provides JSON-mode extraction and validation without a
+required Instructor dependency:
 
-- **JSON mode** - For providers supporting `format: "json"`, extract and validate
-- **Schema validation** - Validate decoded JSON against schemas
-- **Custom validators** - Accept pluggable validation functions
-- **Retry-friendly** - On validation failure, retry with error feedback
+- **Function validator** — `(map -> {:ok, term} | {:error, term})`.
+- **Module validator** — `validate/1`, `cast/1`, `from_map/1`, `new/1`, or an
+  Ecto `changeset/2`.
+- **Map schema** — `%{required: [...], optional: [...]}` checks that required
+  keys are present and filters to allowed keys.
+- **List schema** — list of required keys.
+
+The built-in map/list schemas check **required keys only**. JSON Schema
+`type`, `properties`, ranges and nested constraints are not enforced; use a
+function or module validator when those matter.
+
+`LlmCore.Structured.InstructorAdapter` is optional and compiles only when
+Instructor is available.
 
 ---
 
-## Routing System
+## Routing system
 
-The router resolves task types to providers based on TOML configuration:
+The router resolves task types from TOML:
 
-- `routing.default` - Default route entry
-- `routing.tasks.<task>` - Task-specific overrides with mode and capability requirements
-- Hot-reloads when configuration files change
+- `routing.default` — fallback entry; no default ships with the library.
+- `routing.tasks.<task>` — task-specific alias, mode and capabilities.
+- A project `routing.yml` takes precedence over TOML routing.
+
+The Router refreshes on `{:config_reloaded, :routing}` and polls every 60 s.
+`RoutingPipeline` reads the current table from `Config.Store` (or an explicit
+table passed by the caller).
 
 ---
 
-## Hindsight Memory Integration
+## Memory integration
 
-Hindsight is a semantic memory system accessed via MCP (Model Context Protocol).
-The integration includes:
+`LlmCore.Memory` is the facade and `LlmCore.Memory.Backend` the contract:
+`available?/0`, `retain/3`, `retain_sync/3`, `recall/2`, `reflect/2`.
 
-- **Caching** - Stale-while-revalidate with configurable TTL
-- **Circuit breaker** - Failure isolation to prevent cascade failures
-- **Retry with backoff** - Exponential backoff for transient errors
-- **Write buffering** - Async batched writes for performance
-- **Bank management** - Support for multiple memory banks
+Backends:
 
-### Configuration Precedence
+- `hindsight_rest` (default) — Hindsight REST API, not MCP.
+- `foresight_http` — Hindsight-compatible HTTP endpoint.
+- `foresight_inprocess` — optional; the host starts `Foresight.Supervisor`.
 
-1. UI runtime override (ETS, session-only)
+The HTTP backends share cache, circuit breaker, retry with backoff, and a
+write-behind buffer. The buffer traps exits so a graceful supervisor shutdown
+calls `terminate/2` and persists queued retains; a hard kill cannot be
+intercepted.
+
+### Configuration precedence
+
+1. UI/runtime override (ETS, session-only)
 2. Project config
 3. Global config
-4. Environment variable (`HINDSIGHT_URL`)
+4. `HINDSIGHT_URL`
 5. Auto-discovered endpoint
 
 ---
 
-## Configuration System
+## Configuration system
 
-### Multi-Level Precedence
+### Layered sources
 
 ```
-1. Runtime overrides (ETS)     ← Highest priority
-2. Environment variables
-3. Project config (<project>/.llm_core/)
-4. Global config (~/.llm_core/)
-5. Compiled defaults           ← Lowest priority
+1. Bundled priv/config/llm_core.toml
+2. ~/.llm_core/config/llm_core.toml
+3. <project>/.llm_core/llm_core.toml
+4. $LLM_CORE_CONFIG
+5. opts[:path]
+6. Runtime ETS overrides
 ```
 
-### Hot Reload
+Later sources override earlier ones. `${VAR:default}` placeholders are
+interpolated at load time.
 
-Configuration is stored in TOML format. The `LlmCore.Config.Watcher` monitors
-config directories for changes and triggers reload with debouncing (100ms window).
-The normalized snapshot lives in `LlmCore.Config.Store` (ETS) so the router,
-provider registry, and memory pipelines react immediately.
+### Hot reload
+
+`LlmCore.Config.Watcher` watches the **project** config directory
+(`<project>/.llm_core/`) with a 100 ms debounce and reloads the affected
+section. The global layer, the bundled layer and `LLM_CORE_CONFIG` are not
+watched: they are read at boot or by an explicit reload.
+
+The normalised snapshot lives in `LlmCore.Config.Store` (ETS), so the router,
+provider registry and memory pipeline see the new values after a reload.
+
+`DEVMAN_HOME` and `DEVMAN_CONFIG` remain accepted for compatibility as
+fallbacks for `LLM_CORE_HOME` and `LLM_CORE_PROJECT_CONFIG`; each emits one
+deprecation warning per VM and will be removed in 0.10.
+
+### Execution control
+
+`LlmCore.Executor.Control` is an ETS registry of active CLI ports keyed by
+`execution_id`. `CLIProvider.send/3` and `stream/3` register the port when the
+caller passes `execution_id:`. A consumer can call `Control.lookup/1` and close
+the port to interrupt the CLI process. This is best-effort and requires the
+caller to supply an id.
 
 ---
 
-## Telemetry Events
+## Telemetry events
 
 ```elixir
-# Provider events
-[:llm_core, :provider, :send, :start]
-[:llm_core, :provider, :send, :stop]
-[:llm_core, :provider, :send, :exception]
-[:llm_core, :provider, :stream, :start]
-[:llm_core, :provider, :stream, :chunk]
-[:llm_core, :provider, :stream, :stop]
+# Pipeline spans — each has :start, :stop, :exception
+[:llm_core, :inference_pipeline, ...]
+[:llm_core, :routing_pipeline, ...]
+[:llm_core, :memory_pipeline, ...]
+[:llm_core, :provider_dispatch, ...]
 
-# Router events
-[:llm_core, :router, :resolve, :start]
-[:llm_core, :router, :resolve, :stop]
-[:llm_core, :router, :fallback]
-[:llm_core, :routing, :error]   # unconditional (not sampled); %{reason, detail, task_type, caller_ref}
+# Routing failures (unconditional)
+[:llm_core, :routing, :error]
 
-# Hindsight events
-[:llm_core, :hindsight, :retain]
-[:llm_core, :hindsight, :recall, :start]
-[:llm_core, :hindsight, :recall, :stop]
-[:llm_core, :hindsight, :circuit_breaker, :state_change]
+# Config
+[:llm_core, :config, :reloaded]
 
-# Config events
-[:llm_core, :config, :reload]
-[:llm_core, :config, :watcher, :change]
+# Agent loop
+[:llm_core, :agent, :loop_iteration]
+[:llm_core, :agent, :tool_call, :start]
+[:llm_core, :agent, :tool_call, :stop]
+[:llm_core, :agent, :complete]
+
+# Tool dispatch
+[:llm_core, :tool_dispatch, :sub_call, :start]
+
+# Memory health
+[:llm_core, :hindsight, :health]
 ```
+
+Span sampling and the built-in logger are controlled by
+The telemetry settings control sampling and the logger; the routing error event is not sampled.
 
 ---
 
-## Testing Approach
+## Testing approach
 
-- **Unit tests** - Each provider in isolation (mocked HTTP), router rule matching,
-  config loading/merging, structured output extraction
-- **Integration tests** - Provider → Router → Response flow, Hindsight retain/recall,
-  config hot-reload, streaming end-to-end
-- **Property-based tests** - Routing rule precedence, config merge behavior,
-  response normalization across providers
-- **Behaviour compliance** - All providers implement the behaviour correctly
-
-Test infrastructure includes `Mox` for mock providers and `StreamData` for
-property-based testing.
+- Unit tests for provider adapters, config loading/merging, routing rules,
+  structured validation and agent stages.
+- Integration tests for provider → router → response, memory flows, config
+  reload and the async tool-dispatch pipeline.
+- Property-based tests with StreamData for routing precedence and config
+  merge behaviour.
+- Mox is available for provider mocking.

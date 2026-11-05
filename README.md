@@ -6,15 +6,15 @@ LlmCore is the shared LLM substrate that powers the [Fosferon](https://github.co
 
 ## Why LlmCore?
 
-- **One API, every provider.** Cloud APIs (Anthropic, OpenAI, Z.ai), local inference (Ollama, DGX Spark), and CLI tools (Claude Code, Gemini CLI, Codex, Droid, Kimi) all share the same `Provider` behaviour. Route by task type, fall back gracefully, add new providers without writing Elixir.
+- **One API, every provider.** Cloud APIs (Anthropic, OpenAI-compatible), local inference (Ollama, OpenAI-compatible appliances), and CLI tools all share the same `Provider` behaviour. Route by task type, fall back gracefully, add new providers without writing Elixir.
 
 - **Config-driven CLI providers.** Adding a new CLI tool is a TOML block — no Elixir code needed. Declare the binary, flags, prompt transport, system prompt strategy, and output normalization. LlmCore handles the rest.
 
 - **In-process agentic loops.** `LlmCore.Agent.Loop` runs tool-calling iterations inside the BEAM VM — no subprocess, no CLI overhead. Built-in circuit breaking detects stuck loops. Uses any API provider that supports tool use.
 
-- **Hot-reload TOML configuration.** Change providers, routing rules, and memory settings without restarting. File watcher with debouncing keeps the runtime store (`ETS`) in sync with disk.
+- **Hot-reload TOML configuration.** Change providers, routing rules, and memory settings in the project layer (`<project>/.llm_core/`) without restarting. A debounced file watcher keeps the runtime store (`ETS`) in sync with that directory. The global `~/.llm_core/config` layer is read at boot and by explicit reloads, not watched.
 
-- **Structured output without the weight.** JSON-mode extraction and schema validation built in. No Instructor dependency. Custom validators via functions.
+- **Structured output without the weight.** JSON-mode extraction and required-key validation built in. The built-in map/list schemas check that required keys are present; use a function or module validator for full JSON Schema semantics. No Instructor dependency.
 
 - **Pluggable semantic memory.** Resilient Hindsight and Foresight integrations with caching, circuit breaker, retry with backoff, and write buffering. Store once, recall by meaning.
 
@@ -275,7 +275,8 @@ LlmCore is built on [ALF](https://github.com/antonmi/alf) (Antonmi's Flow-based 
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Three ALF pipelines handle the core flows:
+Three ALF pipelines handle the core flows (the agent loop adds a fourth,
+per-iteration pipeline and a separate tool-dispatch pipeline):
 
 - **Inference Pipeline** — normalize request → resolve route → check capabilities → dispatch provider → apply structured output → emit telemetry
 - **Routing Pipeline** — parse task type → load routing config → match rules → resolve agent, or fail with `:no_routing_default`
@@ -285,26 +286,35 @@ See the [Architecture Guide](https://hexdocs.pm/llm_core/architecture.html) for 
 
 ## Telemetry Events
 
+These are the events the code actually emits:
+
 ```elixir
-# Provider dispatch
-[:llm_core, :provider, :send, :start | :stop | :exception]
-[:llm_core, :provider, :stream, :start | :chunk | :stop]
+# Pipeline spans (each has :start, :stop and :exception)
+[:llm_core, :inference_pipeline, :start | :stop | :exception]
+[:llm_core, :routing_pipeline, :start | :stop | :exception]
+[:llm_core, :memory_pipeline, :start | :stop | :exception]
+[:llm_core, :provider_dispatch, :start | :stop | :exception]
 
-# Router decisions
-[:llm_core, :router, :resolve, :start | :stop]
-[:llm_core, :router, :fallback]
-[:llm_core, :routing, :error]   # unconditional (not sampled); %{reason, detail, task_type, caller_ref}
-
-# Agent loop
-[:llm_core, :agent, :complete]
-
-# Memory operations
-[:llm_core, :hindsight, :retain | :recall | :reflect]
-[:llm_core, :hindsight, :circuit_breaker, :state_change]
+# Routing failures (unconditional, not sampled)
+[:llm_core, :routing, :error]   # %{reason, detail, task_type, caller_ref}
 
 # Configuration
-[:llm_core, :config, :reload]
+[:llm_core, :config, :reloaded]
+
+# Agent loop
+[:llm_core, :agent, :loop_iteration]
+[:llm_core, :agent, :tool_call, :start | :stop]
+[:llm_core, :agent, :complete]
+
+# Tool-dispatch recipe sub-calls
+[:llm_core, :tool_dispatch, :sub_call, :start]
+
+# Memory health monitor
+[:llm_core, :hindsight, :health]
 ```
+
+`Telemetry.Settings` controls span sampling and the built-in logger. The
+unconditional routing error is emitted even when spans are sampled out.
 
 ## Built-in Providers
 
