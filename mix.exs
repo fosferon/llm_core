@@ -24,9 +24,9 @@ defmodule LlmCore.MixProject do
       ci: [
         "format --check-formatted",
         "compile --warnings-as-errors",
-        "test",
+        "cmd env MIX_ENV=test mix test",
         "docs",
-        "hex.build"
+        "cmd mix hex.build"
       ]
     ]
   end
