@@ -12,6 +12,8 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
     * `call` — The original `%Call{}` that triggered dispatch
     * `resolve_fn` — Function to execute individual tool calls
     * `recipe` — Recipe function or `nil` for passthrough
+    * `timeout` — per-dispatch budget in milliseconds
+    * `deadline` — monotonic deadline derived from `timeout`
 
   ### Pipeline state — populated by stages
 
@@ -20,6 +22,7 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
     * `serial_results` — Results from serial step execution
     * `serial_context` — Accumulated context from serial results
     * `current_step` — Current parallel step being executed
+    * `step_index` — Original position of the current parallel step
     * `total_parallel` — Total number of parallel steps expected
     * `step_result` — Result of the current parallel step
     * `parallel_results` — Collected parallel step results
@@ -38,11 +41,14 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
           call: Call.t() | nil,
           resolve_fn: (Call.t() -> {:ok, String.t()} | {:error, String.t()}) | nil,
           recipe: (map() -> map()) | nil,
+          timeout: pos_integer(),
+          deadline: integer() | nil,
           strategy: :passthrough | :recipe,
           plan: map() | nil,
           serial_results: [map()],
           serial_context: map(),
           current_step: map() | nil,
+          step_index: non_neg_integer() | nil,
           total_parallel: non_neg_integer(),
           step_result: map() | nil,
           parallel_results: [map()],
@@ -56,12 +62,15 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
     :call,
     :resolve_fn,
     :recipe,
+    :deadline,
     :current_step,
+    :step_index,
     :step_result,
     :plan,
     :result,
     :error,
     strategy: :passthrough,
+    timeout: 300_000,
     serial_results: [],
     serial_context: %{},
     total_parallel: 0,

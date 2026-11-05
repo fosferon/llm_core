@@ -10,8 +10,11 @@ defmodule LlmCore.Agent.ToolDispatch.PipelineTest do
   # ---------------------------------------------------------------------------
 
   setup do
-    # Ensure pipeline is started in sync mode for deterministic tests
+    # Start from a known mode; another test file may have left the shared
+    # pipeline running in async mode.
+    if Process.whereis(ToolDispatchPipeline), do: ToolDispatchPipeline.stop()
     :ok = ToolDispatchPipeline.ensure_started(sync: true)
+    on_exit(fn -> if Process.whereis(ToolDispatchPipeline), do: ToolDispatchPipeline.stop() end)
     :ok
   end
 

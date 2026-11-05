@@ -16,6 +16,8 @@ defmodule LlmCore.Agent.Context do
     * `tools` — Available tool definitions (`[LlmToolkit.Tool.t()]`)
     * `response` — The LLM response for this iteration
     * `resolve_tool` — `fn(%Call{}) -> {:ok, String.t()} | {:error, String.t()}`
+    * `tool_timeout` — maximum time in milliseconds for one tool dispatch,
+      including all recipe sub-calls (default: 300_000)
     * `resolver_module` — Optional module implementing `ToolResolver` behaviour.
       When set, `DispatchTools` checks for dispatch recipes via
       `resolver_module.dispatch_recipe/1`.
@@ -74,6 +76,7 @@ defmodule LlmCore.Agent.Context do
           response: Response.t() | nil,
           resolve_tool: (Call.t() -> {:ok, String.t()} | {:error, String.t()}) | nil,
           resolver_module: module() | nil,
+          tool_timeout: pos_integer(),
           terminal_tool: String.t() | nil,
           terminal_required: boolean(),
           iteration: non_neg_integer(),
@@ -96,6 +99,7 @@ defmodule LlmCore.Agent.Context do
     :resolve_tool,
     :resolver_module,
     :terminal_tool,
+    tool_timeout: 300_000,
     terminal_required: false,
     messages: [],
     tools: [],

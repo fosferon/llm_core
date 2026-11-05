@@ -43,8 +43,10 @@ defmodule LlmCore.Agent.ToolDispatch.Components.FanOutParallel do
     total = length(steps)
 
     events =
-      Enum.map(steps, fn step ->
-        %{event | current_step: step, total_parallel: total}
+      steps
+      |> Enum.with_index()
+      |> Enum.map(fn {step, index} ->
+        %{event | current_step: step, step_index: index, total_parallel: total}
       end)
 
     {events, nil}

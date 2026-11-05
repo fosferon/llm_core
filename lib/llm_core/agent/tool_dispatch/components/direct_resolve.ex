@@ -8,6 +8,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.DirectResolve do
   """
 
   alias LlmCore.Agent.ToolDispatch.Event
+  alias LlmCore.Agent.ToolDispatch.Execution
 
   @doc """
   Calls `resolve_fn` with the original tool call.
@@ -23,15 +24,30 @@ defmodule LlmCore.Agent.ToolDispatch.Components.DirectResolve do
   """
   @spec call(Event.t(), keyword()) :: Event.t()
   def call(%Event{call: call, resolve_fn: resolve_fn} = event, _opts) do
-    case resolve_fn.(call) do
+    case Execution.run(event, fn -> resolve_fn.(call) end) do
       {:ok, content} ->
         %{event | result: content, status: :ok}
+
+      {:error, {:timeout, timeout_ms}} ->
+        %{
+          event
+          | result: "Tool call timed out after #{timeout_ms}ms",
+            status: :error,
+            error: {:timeout, timeout_ms}
+        }
+
+      {:error, {:execution_error, reason}} ->
+        message = if is_binary(reason), do: reason, else: inspect(reason)
+
+        %{
+          event
+          | result: "Tool execution error: #{message}",
+            status: :error,
+            error: reason
+        }
 
       {:error, reason} ->
         %{event | result: "Error: #{inspect(reason)}", status: :error, error: reason}
     end
-  rescue
-    e ->
-      %{event | result: "Tool execution error: #{Exception.message(e)}", status: :error, error: e}
   end
 end

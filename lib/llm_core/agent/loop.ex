@@ -24,18 +24,6 @@ defmodule LlmCore.Agent.Loop do
   The loop owns iteration control and message accumulation. The pipeline
   (`LlmCore.Agent.Pipeline.Iteration`) owns per-iteration processing logic.
 
-  ## Architecture Mirror
-
-  This mirrors the common `reduce_while` iteration pattern:
-
-      GrooveExecutor                     Agent.Loop
-      ─────────────                      ──────────
-      Enum.reduce_while over steps       Enum.reduce_while over iterations
-      execute_step(step, ctx)            llm_send_fn.(messages, opts)
-      StepwiseEngine.handle_event(...)   Pipeline.Iteration (ALF)
-      {:cont, {:ok, rt, ctx, tokens}}    {:cont, {:ok, state}}
-      {:halt, {:error, reason}}          {:halt, {:error, reason}}
-
   ## Usage
 
       {:ok, response, messages} =
@@ -59,6 +47,7 @@ defmodule LlmCore.Agent.Loop do
           | {:resolve_tool,
              (LlmToolkit.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
           | {:resolver_module, module() | nil}
+          | {:tool_timeout, pos_integer()}
           | {:max_iterations, pos_integer()}
           | {:on_iteration, (Context.t() -> :ok) | nil}
           | {:pipeline_opts, keyword()}
@@ -73,6 +62,7 @@ defmodule LlmCore.Agent.Loop do
         ]
 
   @default_max_iterations 10
+  @default_tool_timeout 300_000
 
   # Bounded recovery for degenerate empty-stop responses:
   # a provider returns HTTP success with finish_reason "stop", blank
@@ -112,6 +102,8 @@ defmodule LlmCore.Agent.Loop do
       * `:resolver_module` — optional module implementing `ToolResolver` behaviour.
         When set, `DispatchTools` checks for dispatch recipes via
         `resolver_module.dispatch_recipe/1`.
+      * `:tool_timeout` — maximum time in milliseconds for one tool dispatch,
+        including all recipe sub-calls (default: #{@default_tool_timeout})
       * `:max_iterations` — iteration ceiling (default: #{@default_max_iterations})
       * `:on_iteration` — optional callback invoked with the pipeline context
         after each iteration
@@ -182,6 +174,16 @@ defmodule LlmCore.Agent.Loop do
 
     terminal_content_key = Keyword.get(opts, :terminal_content_key)
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
+
+    tool_timeout =
+      case Keyword.get(opts, :tool_timeout, @default_tool_timeout) do
+        timeout when is_integer(timeout) and timeout > 0 ->
+          timeout
+
+        other ->
+          raise ArgumentError, ":tool_timeout must be a positive integer, got: #{inspect(other)}"
+      end
+
     max_blank_stops = Keyword.get(opts, :max_blank_stops, @default_max_blank_stops)
     blank_stop_nudge = Keyword.get(opts, :blank_stop_nudge)
 
@@ -218,6 +220,7 @@ defmodule LlmCore.Agent.Loop do
       terminal_content_key: terminal_content_key,
       max_nonterminal_stops: max_nonterminal_stops,
       max_iterations: max_iterations,
+      tool_timeout: tool_timeout,
       max_blank_stops: max_blank_stops,
       blank_stop_nudge: blank_stop_nudge,
       on_iteration: on_iteration,
@@ -427,6 +430,7 @@ defmodule LlmCore.Agent.Loop do
       resolver_module: state.resolver_module,
       terminal_tool: state.terminal_tool,
       terminal_required: state.terminal_required,
+      tool_timeout: state.tool_timeout,
       iteration: iteration,
       max_iterations: state.max_iterations
     }

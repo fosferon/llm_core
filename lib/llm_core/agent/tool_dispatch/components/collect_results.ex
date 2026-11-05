@@ -45,22 +45,33 @@ defmodule LlmCore.Agent.ToolDispatch.Components.CollectResults do
       when total > 0 do
     # step_result is nil — a stage error or skip occurred. Record as error.
     error_result = %{
+      index: event.step_index,
       label: (event.current_step && event.current_step[:label]) || "unknown",
       tool: (event.current_step && event.current_step[:tool]) || "unknown",
       error: "Step produced no result"
     }
 
-    collected = memo ++ [error_result]
+    collect(event, memo ++ [error_result], total)
+  end
 
+  def call(%Event{step_result: result, total_parallel: total} = event, memo, _opts) do
+    result = if is_map(result), do: Map.put_new(result, :index, event.step_index), else: result
+    collect(event, memo ++ [result], total)
+  end
+
+  defp collect(event, collected, total) do
     if length(collected) >= total do
+      # Workers finish out of order; restore the recipe's declared order.
       {successes, errors} =
-        Enum.split_with(collected, fn r -> is_map(r) and not Map.has_key?(r, :error) end)
+        collected
+        |> Enum.split_with(fn r -> is_map(r) and not Map.has_key?(r, :error) end)
 
       composed_event = %{
         event
-        | parallel_results: successes,
-          errors: event.errors ++ errors,
+        | parallel_results: ordered(successes),
+          errors: event.errors ++ ordered(errors),
           current_step: nil,
+          step_index: nil,
           step_result: nil
       }
 
@@ -70,26 +81,9 @@ defmodule LlmCore.Agent.ToolDispatch.Components.CollectResults do
     end
   end
 
-  def call(%Event{step_result: result, total_parallel: total} = event, memo, _opts) do
-    collected = memo ++ [result]
-
-    if length(collected) >= total do
-      # All results collected — separate successes and errors
-      {successes, errors} =
-        Enum.split_with(collected, fn r -> is_map(r) and not Map.has_key?(r, :error) end)
-
-      composed_event = %{
-        event
-        | parallel_results: successes,
-          errors: event.errors ++ errors,
-          current_step: nil,
-          step_result: nil
-      }
-
-      {[composed_event], []}
-    else
-      # Still waiting for more results
-      {[], collected}
-    end
+  defp ordered(results) do
+    results
+    |> Enum.sort_by(& &1[:index], :asc)
+    |> Enum.map(&Map.delete(&1, :index))
   end
 end

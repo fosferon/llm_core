@@ -11,6 +11,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ExecuteOneCall do
   """
 
   alias LlmCore.Agent.ToolDispatch.Event
+  alias LlmCore.Agent.ToolDispatch.Execution
   alias LlmToolkit.Tool.Call
 
   @doc """
@@ -43,16 +44,13 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ExecuteOneCall do
       %{tool_name: step.tool, label: step.label, phase: :parallel}
     )
 
-    case resolve_fn.(call_struct) do
+    case Execution.run(event, fn -> resolve_fn.(call_struct) end) do
       {:ok, content} ->
         %{event | step_result: %{label: step.label, tool: step.tool, content: content}}
 
       {:error, reason} ->
         %{event | step_result: %{label: step.label, tool: step.tool, error: reason}}
     end
-  rescue
-    e ->
-      %{event | step_result: %{label: step.tool, tool: step.tool, error: Exception.message(e)}}
   end
 
   @spec resolve_arguments(map() | (map() -> map()), map()) :: map()

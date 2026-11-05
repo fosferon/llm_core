@@ -17,8 +17,9 @@ defmodule LlmCore.Agent.Components.DispatchTools do
     * `[:llm_core, :agent, :tool_call, :start]`
     * `[:llm_core, :agent, :tool_call, :stop]`
 
-  Analogous to a stepwise action stage: the stage that
-  executes the actual work (capabilities in stepwise, tool resolution here).
+  Recipe-backed calls run through the async `ToolDispatch` pipeline with a
+  per-dispatch timeout taken from the caller (`:tool_timeout`). The pipeline
+  is shared by all callers and is never restarted from this stage.
   """
 
   alias LlmCore.Agent.Context
@@ -26,6 +27,9 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   alias LlmCore.Agent.ToolDispatch.Event, as: DispatchEvent
   alias LlmToolkit.Tool.Call
   alias LlmToolkit.Tool.Result
+
+  @default_tool_timeout 300_000
+  @alf_timeout_grace_ms 1_000
 
   @doc """
   Dispatches each tool call through the resolver and collects results.
@@ -72,7 +76,7 @@ defmodule LlmCore.Agent.Components.DispatchTools do
 
               recipe ->
                 # Recipe found — delegate to ToolDispatch pipeline
-                dispatch_via_pipeline(call, resolve_fn, recipe)
+                dispatch_via_pipeline(call, resolve_fn, recipe, ctx)
             end
           end)
 
@@ -105,26 +109,32 @@ defmodule LlmCore.Agent.Components.DispatchTools do
     end
   end
 
-  @spec dispatch_via_pipeline(Call.t(), function(), function()) :: Result.t()
-  defp dispatch_via_pipeline(%Call{} = call, resolve_fn, recipe) do
+  @spec dispatch_via_pipeline(Call.t(), function(), function(), Context.t()) :: Result.t()
+  defp dispatch_via_pipeline(%Call{} = call, resolve_fn, recipe, %Context{} = ctx) do
+    timeout = tool_timeout(ctx)
+
     dispatch_event = %DispatchEvent{
       call: call,
       resolve_fn: resolve_fn,
-      recipe: recipe
+      recipe: recipe,
+      timeout: timeout,
+      deadline: System.monotonic_time(:millisecond) + timeout
     }
 
-    :ok = ensure_pipeline_sync()
+    # The pipeline is shared by every caller. Start it in async mode if it is
+    # not running and never stop or restart it here: another caller may have
+    # in-flight work.
+    :ok = ToolDispatchPipeline.ensure_started()
 
-    case ToolDispatchPipeline.call(dispatch_event) do
-      %DispatchEvent{result: content, status: :ok} when is_binary(content) and content != "" ->
-        %Result{tool_call_id: call.id, name: call.name, content: content}
-
-      %DispatchEvent{result: content} when is_binary(content) and content != "" ->
-        %Result{tool_call_id: call.id, name: call.name, content: content}
-
-      %DispatchEvent{status: :ok, result: nil} ->
-        # Pipeline completed but compose produced nil — fall back to direct
-        fallback_to_direct(call, resolve_fn)
+    # Give ALF enough time to receive the bounded error the execution helper
+    # produces. The helper, not ALF's default, owns the caller's budget.
+    case ToolDispatchPipeline.call(dispatch_event, timeout: timeout + @alf_timeout_grace_ms) do
+      %DispatchEvent{status: :error, error: {:timeout, timeout_ms}} ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: "Tool call timed out after #{timeout_ms}ms"
+        }
 
       %DispatchEvent{status: :error, error: error} ->
         %Result{
@@ -133,9 +143,8 @@ defmodule LlmCore.Agent.Components.DispatchTools do
           content: "Dispatch error: #{inspect(error)}"
         }
 
-      %DispatchEvent{} ->
-        # Pipeline returned empty result — fall back to direct resolution
-        fallback_to_direct(call, resolve_fn)
+      %DispatchEvent{status: :ok, result: content} when is_binary(content) and content != "" ->
+        %Result{tool_call_id: call.id, name: call.name, content: content}
 
       %ALF.ErrorIP{error: error} ->
         %Result{
@@ -145,8 +154,11 @@ defmodule LlmCore.Agent.Components.DispatchTools do
         }
 
       nil ->
-        # Pipeline returned nil (no events reached the end) — fall back to direct
-        fallback_to_direct(call, resolve_fn)
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: "Tool call timed out after #{timeout}ms"
+        }
 
       other ->
         %Result{
@@ -156,41 +168,18 @@ defmodule LlmCore.Agent.Components.DispatchTools do
         }
     end
   rescue
-    _e ->
-      # Pipeline crashed — fall back to direct resolution
-      fallback_to_direct(call, resolve_fn)
+    e ->
+      %Result{
+        tool_call_id: call.id,
+        name: call.name,
+        content: "Dispatch error: #{Exception.message(e)}"
+      }
   end
 
-  @spec ensure_pipeline_sync() :: :ok
-  defp ensure_pipeline_sync do
-    case Process.whereis(ToolDispatchPipeline) do
-      nil ->
-        :ok = ToolDispatchPipeline.ensure_started(sync: true)
+  defp tool_timeout(%Context{tool_timeout: timeout}) when is_integer(timeout) and timeout > 0,
+    do: timeout
 
-      _pid ->
-        # Verify pipeline is in sync mode by checking for absence of Producer
-        producer_name = :"#{ToolDispatchPipeline}.Producer"
-
-        if Process.whereis(producer_name) do
-          # Pipeline is in async mode — stop and restart in sync
-          try do
-            ToolDispatchPipeline.stop()
-          catch
-            _, _ -> :ok
-          end
-
-          Process.sleep(10)
-          :ok = ToolDispatchPipeline.ensure_started(sync: true)
-        else
-          :ok
-        end
-    end
-  end
-
-  @spec fallback_to_direct(Call.t(), function()) :: Result.t()
-  defp fallback_to_direct(%Call{} = call, resolve_fn) do
-    execute_one(call, resolve_fn)
-  end
+  defp tool_timeout(%Context{}), do: @default_tool_timeout
 
   @spec execute_one(Call.t(), (Call.t() -> {:ok, String.t()} | {:error, String.t()})) ::
           Result.t()

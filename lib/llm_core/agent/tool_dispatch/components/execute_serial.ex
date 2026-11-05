@@ -10,6 +10,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ExecuteSerial do
   """
 
   alias LlmCore.Agent.ToolDispatch.Event
+  alias LlmCore.Agent.ToolDispatch.Execution
   alias LlmToolkit.Tool.Call
 
   @doc """
@@ -50,7 +51,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ExecuteSerial do
           %{tool_name: step.tool, label: step.label, phase: :serial}
         )
 
-        case event.resolve_fn.(call) do
+        case Execution.run(event, fn -> event.resolve_fn.(call) end) do
           {:ok, content} ->
             result = %{label: step.label, tool: step.tool, content: content}
             updated_context = Map.put(context, step.tool, content)

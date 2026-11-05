@@ -40,7 +40,13 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ComposeOutput do
         default_compose(event)
       end
 
-    %{event | result: composed, status: :ok}
+    case Enum.find_value(event.errors, fn
+           %{error: {:timeout, timeout_ms}} -> {:timeout, timeout_ms}
+           _ -> nil
+         end) do
+      nil -> %{event | result: composed, status: :ok}
+      error -> %{event | result: composed, status: :error, error: error}
+    end
   end
 
   @spec get_compose_fn(map() | nil) :: (map() -> String.t()) | nil
