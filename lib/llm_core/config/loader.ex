@@ -390,13 +390,13 @@ defmodule LlmCore.Config.Loader do
   end
 
   @valid_prompt_positions ~w(last flagged)
-  @valid_prompt_transports ~w(last flagged stdin)
+  @valid_prompt_transports ~w(last flagged)
   @valid_system_prompt_transports ~w(flag file_flag inline_fallback unsupported)
   @valid_output_modes ~w(stdout_text final_message_only json)
   @valid_output_event_formats ~w(jsonl)
   @valid_file_transforms ~w(agent_spec_yaml)
   @valid_tool_call_transports ~w(llm_core_json)
-  @valid_model_resolutions ~w(gc_default provider_runtime explicit_only)
+  @valid_model_resolutions ~w(caller_default gc_default provider_runtime explicit_only)
 
   defp build_cli_config(id, attrs) when is_map(attrs) do
     binary = Map.get(attrs, "binary")
@@ -496,16 +496,23 @@ defmodule LlmCore.Config.Loader do
   end
 
   defp resolve_cli_model_resolution(attrs, %CLIProvider.Config{} = cli_config) do
-    Map.get(attrs, "model_resolution") || cli_config.model_resolution
+    case blank_to_nil(Map.get(attrs, "model_resolution")) do
+      nil -> cli_config.model_resolution
+      value -> safe_to_atom(value)
+    end
   end
 
   defp resolve_model_resolution(attrs) do
     case blank_to_nil(Map.get(attrs, "model_resolution")) do
       nil ->
-        if blank_to_nil(Map.get(attrs, "default_model")), do: :gc_default, else: :provider_runtime
+        if blank_to_nil(Map.get(attrs, "default_model")),
+          do: :caller_default,
+          else: :provider_runtime
 
       "provider_runtime" ->
-        if blank_to_nil(Map.get(attrs, "default_model")), do: :gc_default, else: :provider_runtime
+        if blank_to_nil(Map.get(attrs, "default_model")),
+          do: :caller_default,
+          else: :provider_runtime
 
       value ->
         safe_to_atom(value)

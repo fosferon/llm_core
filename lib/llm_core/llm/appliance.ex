@@ -1,6 +1,6 @@
 defmodule LlmCore.LLM.Appliance do
   @moduledoc """
-  Generic local inference appliance provider (DGX Spark, future devices).
+  Generic local inference appliance provider for OpenAI-compatible endpoints.
 
   Assumes an OpenAI-compatible chat completion API exposed over HTTP.
   """

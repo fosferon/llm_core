@@ -13,7 +13,7 @@ defmodule LlmCore.LLM.NativeTest do
   # HTTP calls.
 
   # build_send_result/2 maps a Loop.run result to the provider boundary,
-  # preserving bounded terminal diagnostics (GC-5523).
+  # preserving bounded terminal diagnostics (empty-stop contract).
 
   describe "build_send_result/2" do
     test "success preserves provider metadata including finish_reason" do
@@ -79,7 +79,7 @@ defmodule LlmCore.LLM.NativeTest do
       assert error.details == nil
     end
 
-    test "a candidate crash becomes a structured provider error (GC-5857)" do
+    test "a candidate crash becomes a structured provider error (probe connection isolation)" do
       details = %{provider: Mod1, exception: "boom", kind: :error}
 
       assert {:error, %Error{} = error} =
@@ -180,7 +180,7 @@ defmodule LlmCore.LLM.NativeTest do
       assert :counters.get(calls, 1) == 1
     end
 
-    test "empty_stop advances the cascade to the next provider (GC-5523)" do
+    test "empty_stop advances the cascade to the next provider (empty-stop contract)" do
       # A degenerate backend (blank stop after blank stop) is provider-specific
       # behavior — another backend may complete the same task.
       run = fn
@@ -194,7 +194,7 @@ defmodule LlmCore.LLM.NativeTest do
                Native.try_cascade(candidates, run)
     end
 
-    test "a crashing candidate is isolated and the cascade advances (GC-5857)" do
+    test "a crashing candidate is isolated and the cascade advances (probe connection isolation)" do
       calls = :counters.new(1, [])
 
       run = fn
@@ -219,7 +219,7 @@ defmodule LlmCore.LLM.NativeTest do
       assert log =~ "Mod1"
     end
 
-    test "a crashing candidate exit is isolated too (GC-5857)" do
+    test "a crashing candidate exit is isolated too (probe connection isolation)" do
       run = fn
         {Mod1, _, _} -> exit(:stale_pooled_socket)
         {Mod2, _, _} -> {:ok, %{content: "survived exit"}, []}
@@ -230,7 +230,7 @@ defmodule LlmCore.LLM.NativeTest do
       assert {:ok, %{content: "survived exit"}, []} = Native.try_cascade(candidates, run)
     end
 
-    test "crashes are recorded in cascade exhaustion (GC-5857)" do
+    test "crashes are recorded in cascade exhaustion (probe connection isolation)" do
       run = fn
         {Mod1, _, _} -> raise "boom-1"
         {Mod2, _, _} -> {:error, :timeout}
@@ -295,7 +295,7 @@ defmodule LlmCore.LLM.NativeTest do
     end
   end
 
-  describe "probe connection isolation (GC-5857)" do
+  describe "probe connection isolation (probe connection isolation)" do
     test "model availability probe sends connection: close" do
       model = "probe-model-#{System.unique_integer([:positive])}"
       body = ~s({"data":[{"id":"#{model}"}]})

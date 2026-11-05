@@ -9,9 +9,9 @@ defmodule LlmCore.LLM.Provider do
 
   ## Provider Types
 
-    * `:api`    - Remote HTTP APIs (OpenAI, Anthropic, Z.ai)
-    * `:local`  - Local GPU / appliance endpoints (Ollama, DGX Spark)
-    * `:cli`    - Command-line tools (Claude Code CLI, Gemini CLI)
+    * `:api`    - Remote HTTP APIs (OpenAI-compatible, Anthropic)
+    * `:local`  - Local HTTP endpoints (Ollama, OpenAI-compatible appliances)
+    * `:cli`    - Command-line tools
 
   ## Prompt Shape
 
@@ -193,7 +193,7 @@ defmodule LlmCore.LLM.Provider do
   ## Returns
 
     * `:cli` - CLI-based provider (e.g., Claude Code, Gemini CLI)
-    * `:api` - API-based provider (e.g., OpenAI, Z.ai)
+    * `:api` - API-based provider (e.g. OpenAI-compatible, Anthropic)
 
   CLI providers support pass-through mode where raw commands can be
   forwarded directly to the underlying CLI.

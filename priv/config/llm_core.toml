@@ -31,17 +31,20 @@ sample_rate = 1.0
 enable_logger = true
 logger_level = "info"
 
+# Provider default_model values are placeholders so the package ships no
+# environment-specific model choice. Set a real id in your project or home
+# layer (or pass :model per call).
 [providers.anthropic]
 module = "LlmCore.LLM.Anthropic"
 type = "cloud"
 enabled = true
-default_model = "claude-3-5-sonnet"
+default_model = "anthropic-model-id"
 aliases = ["anthropic", "claude"]
 cost_tier = "premium"
 
 [providers.anthropic.agent]
 name = "claude"
-config = {model = "claude-3-5-sonnet", temperature = 0.2}
+config = {model = "anthropic-model-id", temperature = 0.2}
 
 [providers.anthropic.auth]
 api_key_env = "ANTHROPIC_API_KEY"
@@ -56,13 +59,13 @@ streaming = true
 module = "LlmCore.LLM.OpenAI"
 type = "cloud"
 enabled = true
-default_model = "gpt-4o-mini"
+default_model = "openai-model-id"
 aliases = ["openai", "gpt"]
 cost_tier = "standard"
 
 [providers.openai.agent]
 name = "openai"
-config = {model = "gpt-4o-mini", temperature = 0.1}
+config = {model = "openai-model-id", temperature = 0.1}
 
 [providers.openai.auth]
 api_key_env = "OPENAI_API_KEY"
@@ -77,13 +80,13 @@ streaming = true
 module = "LlmCore.LLM.Ollama"
 type = "local"
 enabled = true
-default_model = "llama3.1"
+default_model = "ollama-model-id"
 aliases = ["ollama", "local"]
 cost_tier = "local"
 
 [providers.ollama.agent]
 name = "ollama"
-config = {model = "llama3.1", temperature = 0.7}
+config = {model = "ollama-model-id", temperature = 0.7}
 
 [providers.ollama.options]
 base_url = "${OLLAMA_URL:http://localhost:11434}"
@@ -98,7 +101,7 @@ streaming = true
 module = "LlmCore.LLM.Appliance"
 type = "local"
 enabled = true
-default_model = "qwen3.5-27b-claude-4.6-opus-distilled-mlx"
+default_model = "local-model-id"
 aliases = ["appliance", "local", "lmstudio"]
 cost_tier = "free"
 
@@ -110,7 +113,7 @@ streaming = true
 module = "LlmCore.LLM.OpenAI"
 type = "cloud"
 enabled = true
-default_model = "glm-5.1"
+default_model = "zai-model-id"
 aliases = ["zai", "z"]
 cost_tier = "plan"
 
@@ -185,8 +188,9 @@ aliases = ["droid"]
 binary = "droid"
 subcommand = "exec"
 default_timeout = 1800000
-default_model = "claude-opus-4-6"
-model_resolution = "gc_default"
+# Set default_model here if your droid profile has a fixed model; when unset
+# the caller's :model is passed through, or no model flag is sent.
+model_resolution = "caller_default"
 prompt_position = "last"
 prompt_transport = "last"
 system_prompt_transport = "file_flag"
@@ -234,7 +238,7 @@ system_prompt_transport = "file_flag"
 output_mode = "stdout_text"
 stdin_hack = true
 # --no-session --no-extensions: prevent extension auto-loading in
-# daemon-dispatched runs where duplicate tool registrations can cause
+# non-interactive runs where duplicate tool registrations can cause
 # Pi startup conflicts and apparent dispatch timeouts.
 prefix_args = ["--print", "--no-session", "--no-extensions"]
 install_hint = "Install pi CLI and ensure `pi` is in PATH"
@@ -333,7 +337,7 @@ stdin_hack = false
 # stdout session noise (banners, progress indicators, etc.)
 output_file_flag = "--output-last-message"
 # codex exec ≥ 0.164 has no --full-auto; unattended runs pick the sandbox
-# explicitly. --skip-git-repo-check: a dispatcher's cwd is often not a repo.
+# explicitly. --skip-git-repo-check: the caller's cwd is often not a repo.
 auto_approve_args = ["-s", "workspace-write", "--skip-git-repo-check"]
 sandbox_bypass_args = ["--dangerously-bypass-approvals-and-sandbox"]
 install_hint = "Install with: npm install -g @openai/codex"

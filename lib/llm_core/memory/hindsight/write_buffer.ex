@@ -85,6 +85,11 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
 
   @impl true
   def init(_opts) do
+    # A supervised shutdown sends :shutdown; without trapping exits the VM
+    # terminates this GenServer without calling terminate/2, losing buffered
+    # retains. Trap exits so the buffer is persisted on a graceful stop.
+    Process.flag(:trap_exit, true)
+
     # Restore buffer from disk if exists
     buffer = restore_buffer()
 

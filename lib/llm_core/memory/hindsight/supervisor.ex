@@ -1,6 +1,6 @@
 defmodule LlmCore.Memory.Hindsight.Supervisor do
   @moduledoc """
-  Supervisor for Hindsight MCP integration components.
+  Supervisor for Hindsight REST integration components.
 
   Starts and manages:
   - Cache GenServer

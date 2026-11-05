@@ -9,13 +9,13 @@ defmodule LlmCore.LLM.Native.RouterTest do
   @default_config %{
     cascade: ["appliance", "zai", "anthropic"],
     default_models: %{
-      "appliance" => "qwen3.5-27b-claude-4.6-opus-distilled-mlx",
-      "zai" => "glm-5.1",
+      "appliance" => "appliance-model-v1",
+      "zai" => "zai-model-v1",
       "anthropic" => "claude-sonnet-4-6"
     },
     model_routing: [
       %{"pattern" => "claude", "provider" => "anthropic"},
-      %{"pattern" => "glm", "provider" => "zai"},
+      %{"pattern" => "zai-model", "provider" => "zai"},
       %{"pattern" => "zai", "provider" => "zai"},
       %{"pattern" => "gpt", "provider" => "openai"},
       %{"pattern" => "openai", "provider" => "openai"}
@@ -29,13 +29,13 @@ defmodule LlmCore.LLM.Native.RouterTest do
       id: "appliance",
       module: LlmCore.LLM.Appliance,
       aliases: ["appliance", "local", "lmstudio"],
-      default_model: "qwen3.5-27b-claude-4.6-opus-distilled-mlx"
+      default_model: "appliance-model-v1"
     },
     "zai" => %Definition{
       id: "zai",
-      module: LlmCore.LLM.Zai,
+      module: LlmCore.LLM.OpenAI,
       aliases: ["zai", "z"],
-      default_model: "glm-5.1",
+      default_model: "zai-model-v1",
       options: %{"base_url" => "https://api.z.ai/api/coding/paas/v4"},
       auth: %{"api_key_env" => "ZAI_API_KEY"}
     },
@@ -90,14 +90,14 @@ defmodule LlmCore.LLM.Native.RouterTest do
   describe "resolve/3 with nil model" do
     test "picks first provider in cascade with its default model" do
       assert {:ok, {LlmCore.LLM.Appliance, model, _opts}} = Router.resolve(nil, @default_config)
-      assert model == "qwen3.5-27b-claude-4.6-opus-distilled-mlx"
+      assert model == "appliance-model-v1"
     end
 
     test "respects cascade order — zai first if configured" do
       config = %{@default_config | cascade: ["zai", "anthropic", "appliance"]}
 
-      assert {:ok, {LlmCore.LLM.Zai, model, _opts}} = Router.resolve(nil, config)
-      assert model == "glm-5.1"
+      assert {:ok, {LlmCore.LLM.OpenAI, model, _opts}} = Router.resolve(nil, config)
+      assert model == "zai-model-v1"
     end
 
     test "respects cascade order — anthropic first if configured" do
@@ -121,10 +121,8 @@ defmodule LlmCore.LLM.Native.RouterTest do
 
   describe "resolve/3 with model on appliance" do
     test "routes to appliance when appliance_has_model is true" do
-      assert {:ok, {LlmCore.LLM.Appliance, "qwen3.5-27b-claude-4.6-opus-distilled-mlx", _opts}} =
-               Router.resolve("qwen3.5-27b-claude-4.6-opus-distilled-mlx", @default_config,
-                 appliance_has_model: true
-               )
+      assert {:ok, {LlmCore.LLM.Appliance, "appliance-model-v1", _opts}} =
+               Router.resolve("appliance-model-v1", @default_config, appliance_has_model: true)
     end
 
     test "appliance wins even for claude-named models" do
@@ -147,8 +145,8 @@ defmodule LlmCore.LLM.Native.RouterTest do
     end
 
     test "routes glm models to zai" do
-      assert {:ok, {LlmCore.LLM.Zai, "glm-5.1", _opts}} =
-               Router.resolve("glm-5.1", @default_config, appliance_has_model: false)
+      assert {:ok, {LlmCore.LLM.OpenAI, "zai-model-v1", _opts}} =
+               Router.resolve("zai-model-v1", @default_config, appliance_has_model: false)
     end
 
     test "routes gpt models to openai" do
@@ -180,7 +178,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
     end
 
     test "matches glm pattern" do
-      assert {:ok, "zai"} = Router.route_model("glm-5.1-instruct", @default_config)
+      assert {:ok, "zai"} = Router.route_model("zai-model-v1-instruct", @default_config)
     end
 
     test "returns no_match for unknown model" do
@@ -209,7 +207,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
 
   describe "get_default_model/2" do
     test "returns default model for known alias" do
-      assert Router.get_default_model("zai", @default_config) == "glm-5.1"
+      assert Router.get_default_model("zai", @default_config) == "zai-model-v1"
     end
 
     test "returns nil for unknown alias" do
@@ -225,7 +223,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
 
   describe "resolve_provider/1" do
     test "resolves known provider id" do
-      assert {:ok, {LlmCore.LLM.Zai, "glm-5.1", opts}} = Router.resolve_provider("zai")
+      assert {:ok, {LlmCore.LLM.OpenAI, "zai-model-v1", opts}} = Router.resolve_provider("zai")
       assert opts[:base_url] == "https://api.z.ai/api/coding/paas/v4"
     end
 
@@ -244,8 +242,8 @@ defmodule LlmCore.LLM.Native.RouterTest do
   describe "candidates/3" do
     test "returns primary then remaining cascade entries (nil model)" do
       assert [
-               {LlmCore.LLM.Appliance, "qwen3.5-27b-claude-4.6-opus-distilled-mlx", _},
-               {LlmCore.LLM.Zai, "glm-5.1", _},
+               {LlmCore.LLM.Appliance, "appliance-model-v1", _},
+               {LlmCore.LLM.OpenAI, "zai-model-v1", _},
                {LlmCore.LLM.Anthropic, "claude-sonnet-4-6", _}
              ] = Router.candidates(nil, @default_config)
     end
@@ -259,28 +257,26 @@ defmodule LlmCore.LLM.Native.RouterTest do
 
       # Fallbacks use each provider's default model, not the claude one
       assert Enum.any?(rest, fn
-               {LlmCore.LLM.Appliance, "qwen3.5-27b-claude-4.6-opus-distilled-mlx", _} -> true
+               {LlmCore.LLM.Appliance, "appliance-model-v1", _} -> true
                _ -> false
              end)
 
       assert Enum.any?(rest, fn
-               {LlmCore.LLM.Zai, "glm-5.1", _} -> true
+               {LlmCore.LLM.OpenAI, "zai-model-v1", _} -> true
                _ -> false
              end)
     end
 
     test "appliance-local primary then cloud fallbacks" do
       candidates =
-        Router.candidates("qwen3.5-27b-claude-4.6-opus-distilled-mlx", @default_config,
-          appliance_has_model: true
-        )
+        Router.candidates("appliance-model-v1", @default_config, appliance_has_model: true)
 
       assert [
-               {LlmCore.LLM.Appliance, "qwen3.5-27b-claude-4.6-opus-distilled-mlx", _} | rest
+               {LlmCore.LLM.Appliance, "appliance-model-v1", _} | rest
              ] = candidates
 
       modules = Enum.map(rest, fn {mod, _, _} -> mod end)
-      assert LlmCore.LLM.Zai in modules
+      assert LlmCore.LLM.OpenAI in modules
       assert LlmCore.LLM.Anthropic in modules
     end
 
@@ -363,7 +359,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
       System.put_env("ZAI_API_KEY", "set-but-loader-said-no")
 
       cloud =
-        loader_def("cloud", LlmCore.LLM.Zai, %{
+        loader_def("cloud", LlmCore.LLM.OpenAI, %{
           "api_key_env" => "ZAI_API_KEY",
           "api_key_present" => false
         })
@@ -377,7 +373,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
 
     test "an inline or discovered key (api_key_present true, env nil) is usable" do
       keyed =
-        loader_def("keyed", LlmCore.LLM.Zai, %{
+        loader_def("keyed", LlmCore.LLM.OpenAI, %{
           "api_key_env" => nil,
           "api_key_present" => true,
           "source" => :inline
@@ -386,7 +382,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
       Store.put(:config, :providers, %{"keyed" => keyed})
       config = %{cascade: ["keyed"], default_models: %{}, model_routing: []}
 
-      assert [{LlmCore.LLM.Zai, _, _}] = Router.candidates(nil, config)
+      assert [{LlmCore.LLM.OpenAI, _, _}] = Router.candidates(nil, config)
     end
   end
 
@@ -403,7 +399,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
     test "appliance_has_model is ignored when no Appliance provider is configured" do
       config = %{cascade: ["zai"], default_models: %{}, model_routing: []}
 
-      assert {:ok, {LlmCore.LLM.Zai, "my-model", _}} =
+      assert {:ok, {LlmCore.LLM.OpenAI, "my-model", _}} =
                Router.resolve("my-model", config, appliance_has_model: true)
 
       assert nil == Router.appliance_alias(config)
@@ -422,7 +418,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
       System.delete_env("ANTHROPIC_API_KEY")
       config = %{cascade: ["anthropic", "zai"], default_models: %{}, model_routing: []}
 
-      assert [{LlmCore.LLM.Zai, "glm-5.1", _}] = Router.candidates(nil, config)
+      assert [{LlmCore.LLM.OpenAI, "zai-model-v1", _}] = Router.candidates(nil, config)
       assert [%{provider: "anthropic", reason: :no_credentials}] = Router.skipped(config)
     end
 
@@ -458,7 +454,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
       Store.put(:config, :providers, Map.put(@providers, "some_cli", cli))
       config = %{cascade: ["some_cli", "zai"], default_models: %{}, model_routing: []}
 
-      assert [{LlmCore.LLM.Zai, _, _}] = Router.candidates(nil, config)
+      assert [{LlmCore.LLM.OpenAI, _, _}] = Router.candidates(nil, config)
       assert [%{provider: "some_cli", reason: :not_native}] = Router.skipped(config)
     end
 
@@ -471,7 +467,7 @@ defmodule LlmCore.LLM.Native.RouterTest do
         model_routing: [%{"pattern" => "gpt", "provider" => "openai"}]
       }
 
-      assert [{LlmCore.LLM.Zai, "gpt-oss:120b", _} | _] =
+      assert [{LlmCore.LLM.OpenAI, "gpt-oss:120b", _} | _] =
                Router.candidates("gpt-oss:120b", config)
     end
 
@@ -483,7 +479,9 @@ defmodule LlmCore.LLM.Native.RouterTest do
     test "no cascade configured: the fallback (routing default) is the only candidate" do
       empty = %{cascade: [], default_models: %{}, model_routing: []}
 
-      assert [{LlmCore.LLM.Zai, "glm-5.1", _}] = Router.candidates(nil, empty, fallback: "zai")
+      assert [{LlmCore.LLM.OpenAI, "zai-model-v1", _}] =
+               Router.candidates(nil, empty, fallback: "zai")
+
       assert [] = Router.candidates(nil, empty)
       assert [] = Router.candidates(nil, empty, fallback: nil)
     end

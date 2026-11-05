@@ -12,12 +12,8 @@ defmodule LlmCore.Agent.Pipeline.Iteration do
   6. **LoopDecision** — Decides `{:continue, msgs}` or `{:done, response}`
 
   This is the per-iteration counterpart to the outer loop in
-  `LlmCore.Agent.Loop`. The relationship mirrors the pattern of
-  an outer iteration controller wrapping a per-event processing pipeline:
-
-      GrooveExecutor.run_steps        ↔  LlmCore.Agent.Loop.run
-      Stepwise.Pipeline.Stepwise      ↔  LlmCore.Agent.Pipeline.Iteration
-      StepwiseAction / Advance / etc. ↔  ParseToolCalls / Dispatch / etc.
+  `LlmCore.Agent.Loop`. The outer loop owns iteration control and message
+  accumulation; this pipeline owns the per-iteration stage functions.
   """
 
   use ALF.DSL

@@ -1,6 +1,6 @@
 defmodule LlmCore.Memory.Hindsight.CircuitBreaker do
   @moduledoc """
-  Circuit breaker pattern for Hindsight MCP connections.
+  Circuit breaker pattern for Hindsight REST connections.
 
   States:
   - **Closed**: Normal operation, track failures

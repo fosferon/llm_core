@@ -52,7 +52,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert definition.cli_config.binary == "echo"
       assert definition.cli_config.name == :echo_test
       assert definition.cli_config.default_model == "echo-v1"
-      assert definition.cli_config.model_resolution == :gc_default
+      assert definition.cli_config.model_resolution == :caller_default
       assert definition.cli_config.flags == %{model: "--model"}
       assert definition.aliases == ["echo", "echo-test"]
       assert definition.available? == true
@@ -189,7 +189,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert {:ok, cli_configs} = Store.fetch(:config, :cli_providers)
       assert Map.has_key?(cli_configs, :store_test)
       assert cli_configs[:store_test].binary == "echo"
-      assert cli_configs[:store_test].model_resolution == :gc_default
+      assert cli_configs[:store_test].model_resolution == :caller_default
     end
 
     test "CLI and module providers coexist" do
@@ -293,7 +293,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert cfg.flags[:model] == "--model"
       assert cfg.flags[:system_prompt_file] == "--agent-file"
       assert cfg.preflight == %{help_args: ["--help"], expect_in_help: ["--model"]}
-      assert cfg.model_resolution == :gc_default
+      assert cfg.model_resolution == :caller_default
 
       # default_model from provider level overrides cli level
       assert def.default_model == "rich-v2"
@@ -538,6 +538,33 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert Map.has_key?(all, "reg_cli")
       assert all["reg_cli"].provider_kind == :cli
     end
+  end
+
+  test "model_resolution documents :caller_default and keeps :gc_default as an alias" do
+    config_path = temp_path("cli_model_resolution.toml")
+    on_exit(fn -> File.rm_rf(config_path) end)
+
+    File.write!(config_path, """
+    [providers.caller_default_cli]
+    type = "cli"
+
+    [providers.caller_default_cli.cli]
+    binary = "echo"
+    default_model = "model-v1"
+    model_resolution = "caller_default"
+
+    [providers.gc_default_cli]
+    type = "cli"
+
+    [providers.gc_default_cli.cli]
+    binary = "echo"
+    default_model = "model-v1"
+    model_resolution = "gc_default"
+    """)
+
+    assert {:ok, providers} = Loader.reload_providers(path: config_path)
+    assert providers["caller_default_cli"].cli_config.model_resolution == :caller_default
+    assert providers["gc_default_cli"].cli_config.model_resolution == :gc_default
   end
 
   defp temp_path(name) do

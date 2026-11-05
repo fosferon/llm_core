@@ -36,6 +36,10 @@ defmodule LlmCore.Memory.Hindsight.WriteBufferTest do
     :ok
   end
 
+  test "traps exits so a graceful supervisor shutdown reaches terminate/2" do
+    assert {:trap_exit, true} = Process.info(Process.whereis(WriteBuffer), :trap_exit)
+  end
+
   describe "build_headers/2" do
     test "returns no auth header when no key is configured and no api_key is passed" do
       System.delete_env("HINDSIGHT_API_KEY")

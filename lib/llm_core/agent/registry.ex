@@ -49,8 +49,6 @@ defmodule LlmCore.Agent.Registry do
   alias LlmCore.Provider.Registry, as: ProviderRegistry
 
   alias MapSet
-  alias LlmCore.Provider.Registry, as: ProviderRegistry
-  alias LlmCore.Provider.Definition
 
   @default_name __MODULE__
 
@@ -59,8 +57,7 @@ defmodule LlmCore.Agent.Registry do
     {"gemini", LlmCore.LLM.CLIProvider},
     {"codex", LlmCore.LLM.CLIProvider},
     {"droid", LlmCore.LLM.CLIProvider},
-    {"openai", LlmCore.LLM.OpenAI},
-    {"zai", LlmCore.LLM.Zai}
+    {"openai", LlmCore.LLM.OpenAI}
   ]
 
   ## Client API

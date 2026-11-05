@@ -380,11 +380,32 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert response.model == nil
     end
 
-    test "uses GC-owned default model when configured" do
-      provider = CLIProvider.from_config(:droid)
-      response = CLIProvider.build_response(provider, "output", [])
+    test "uses caller_default model when configured" do
+      config = %CLIProvider.Config{
+        name: :model_cli,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "model-v1",
+        model_resolution: :caller_default
+      }
 
-      assert response.model == "claude-opus-4-6"
+      provider = CLIProvider.from_config(config)
+      assert CLIProvider.build_response(provider, "output", []).model == "model-v1"
+    end
+
+    test "treats gc_default as a deprecated alias for caller_default" do
+      config = %CLIProvider.Config{
+        name: :model_cli,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: "model-v1",
+        model_resolution: :gc_default
+      }
+
+      provider = CLIProvider.from_config(config)
+      assert CLIProvider.build_response(provider, "output", []).model == "model-v1"
     end
 
     test "extracts text chunks from JSONL event output when opted in" do
@@ -1020,7 +1041,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
     test "injects tool bridge into system prompt via agent file", %{provider: provider} do
       tool = %LlmToolkit.Tool{
-        name: "gc_mcpclient",
+        name: "example_mcp_client",
         description: "MCP client proxy",
         parameters: %{"type" => "object"}
       }
@@ -1040,7 +1061,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       assert contents =~ "[LLM_CORE TOOL BRIDGE]"
       assert contents =~ "llm_core_tool_call"
-      assert contents =~ "gc_mcpclient"
+      assert contents =~ "example_mcp_client"
       assert contents =~ "MCP client proxy"
 
       File.rm_rf!(Path.dirname(agent_file))
@@ -1068,7 +1089,7 @@ defmodule LlmCore.LLM.CLIProviderTest do
           provider,
           """
           ```llm_core_tool_call
-          {"name":"gc_mcpclient","arguments":{"action":"servers"}}
+          {"name":"example_mcp_client","arguments":{"action":"servers"}}
           ```
           """,
           model: "test"
@@ -1076,7 +1097,12 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       assert response.content == ""
 
-      assert [%LlmToolkit.Tool.Call{name: "gc_mcpclient", arguments: %{"action" => "servers"}}] =
+      assert [
+               %LlmToolkit.Tool.Call{
+                 name: "example_mcp_client",
+                 arguments: %{"action" => "servers"}
+               }
+             ] =
                response.tool_calls
     end
 

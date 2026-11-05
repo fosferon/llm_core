@@ -74,7 +74,7 @@ defmodule LlmCore.LLM.ApplianceTest do
     end
   end
 
-  # Regression for GC-3389: LM Studio returns a bare JSON string body (e.g.
+  # Regression for degenerate error body: LM Studio returns a bare JSON string body (e.g.
   # "Model unloaded." on idle model-unload) instead of an object. Both the
   # success path (build_response/2) and the error path (classify_error/2)
   # used to raise FunctionClauseError/ArgumentError on non-map bodies.
@@ -281,7 +281,7 @@ defmodule LlmCore.LLM.ApplianceTest do
     end
   end
 
-  describe "probe connection isolation (GC-5857)" do
+  describe "probe connection isolation (probe connection isolation)" do
     test "health probe sends connection: close" do
       {port, request_task} = start_probe_server("ok")
 

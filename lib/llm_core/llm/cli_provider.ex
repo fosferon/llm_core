@@ -13,16 +13,20 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `subcommand` — optional subcommand prepended to args (e.g. `"exec"` for droid)
     * `provider_type` — always `:cli`
     * `default_timeout` — timeout in ms (default: 1_800_000 = 30 min)
-    * `default_model` — real model string used only when GC owns the default
+    * `default_model` — model string used when the caller delegates model
+      selection (`:caller_default`)
     * `model_resolution` — how model selection works for this CLI provider:
-      `:gc_default`, `:provider_runtime`, or `:explicit_only`
+      `:caller_default` (default), `:provider_runtime`, or `:explicit_only`.
+      The deprecated alias `:gc_default` is accepted and behaves identically.
     * `flags` — map of opt key → CLI flag (e.g. `%{model: "--model", auto: "--auto"}`)
     * `prompt_position` — `:last` (default) or `:flagged` (e.g. claude uses `-p`)
     * `prompt_flag` — flag before the prompt when `prompt_position == :flagged` (e.g. `-p`)
     * `prefix_args` — args always prepended (e.g. `["--print"]` for claude)
     * `stdin_hack` — wrap with `/bin/sh -c 'exec "$0" "$@" < /dev/null'` (claude needs this)
     * `install_hint` — shown in not_installed error message
-    * `prompt_transport` — optional semantic prompt transport (`:last`, `:flagged`, `:stdin`)
+    * `prompt_transport` — optional semantic prompt transport (`:last`, `:flagged`).
+      A `"stdin"` value is rejected by the config loader; it was never wired to
+      the process input.
     * `system_prompt_transport` — optional semantic system prompt strategy
     * `cwd_flag` — optional explicit cwd flag for capability introspection
     * `add_dir_flag` — optional explicit add-dir flag for capability introspection
@@ -90,14 +94,14 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           provider_type: :cli,
           default_timeout: pos_integer(),
           default_model: String.t() | nil,
-          model_resolution: :gc_default | :provider_runtime | :explicit_only,
+          model_resolution: :caller_default | :gc_default | :provider_runtime | :explicit_only,
           flags: %{atom() => String.t()},
           prompt_position: :last | :flagged,
           prompt_flag: String.t() | nil,
           prefix_args: [String.t()],
           stdin_hack: boolean(),
           install_hint: String.t() | nil,
-          prompt_transport: :last | :flagged | :stdin | nil,
+          prompt_transport: :last | :flagged | nil,
           system_prompt_transport: :flag | :file_flag | :inline_fallback | :unsupported | nil,
           cwd_flag: String.t() | nil,
           add_dir_flag: String.t() | nil,
@@ -201,6 +205,7 @@ defmodule LlmCore.LLM.CLIProvider do
       {:ok, response} = CLIProvider.send(provider, "hello", model: "v2")
   """
 
+  alias LlmCore.Executor.Control
   alias LlmCore.LLM.{Response, Error, Messages}
   alias LlmCore.LLM.CLIProvider.Config
 
@@ -559,9 +564,6 @@ defmodule LlmCore.LLM.CLIProvider do
 
         :last ->
           args
-
-        :stdin ->
-          args
       end
 
     # Flag-mapped opts
@@ -580,7 +582,6 @@ defmodule LlmCore.LLM.CLIProvider do
       case effective_prompt_transport(cfg) do
         :last -> args ++ [prompt]
         :flagged -> args
-        :stdin -> args
       end
 
     args
@@ -786,7 +787,7 @@ defmodule LlmCore.LLM.CLIProvider do
   end
 
   defp effective_prompt_transport(%Config{prompt_transport: transport})
-       when transport in [:last, :flagged, :stdin],
+       when transport in [:last, :flagged],
        do: transport
 
   defp effective_prompt_transport(%Config{prompt_position: position}), do: position
@@ -819,7 +820,7 @@ defmodule LlmCore.LLM.CLIProvider do
       Keyword.has_key?(opts, :model) ->
         opts[:model]
 
-      cfg.model_resolution == :gc_default ->
+      cfg.model_resolution in [:caller_default, :gc_default] ->
         cfg.default_model
 
       true ->
@@ -1199,7 +1200,7 @@ defmodule LlmCore.LLM.CLIProvider do
   # Direct Port-based execution. No external dependency required —
   # CLIProvider is fully self-contained within llm_core.
 
-  defp run_port(executable, args, timeout, _execution_id) do
+  defp run_port(executable, args, timeout, execution_id) do
     case System.find_executable(executable) do
       nil ->
         {:error, :not_found}
@@ -1213,9 +1214,12 @@ defmodule LlmCore.LLM.CLIProvider do
             args: args
           ])
 
+        _ = maybe_set_active(execution_id, port)
+
         try do
           collect_output(port, timeout, [])
         after
+          _ = maybe_clear_active(execution_id)
           safe_close(port)
         end
     end
@@ -1223,7 +1227,7 @@ defmodule LlmCore.LLM.CLIProvider do
     e -> {:error, e}
   end
 
-  defp stream_port(executable, args, timeout, _execution_id) do
+  defp stream_port(executable, args, timeout, execution_id) do
     case System.find_executable(executable) do
       nil ->
         {:error, :not_found}
@@ -1238,13 +1242,19 @@ defmodule LlmCore.LLM.CLIProvider do
             args: args
           ])
 
+        _ = maybe_set_active(execution_id, port)
+
         stream =
           Stream.resource(
-            fn -> {port, timeout} end,
+            fn -> {port, timeout, execution_id} end,
             &stream_next/1,
             fn
-              nil -> :ok
-              {port, _} -> safe_close(port)
+              nil ->
+                :ok
+
+              {port, _timeout, execution_id} ->
+                _ = maybe_clear_active(execution_id)
+                safe_close(port)
             end
           )
 
@@ -1267,22 +1277,35 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
-  defp stream_next({port, timeout}) do
+  defp stream_next({port, timeout, execution_id}) do
     receive do
       {^port, {:data, {:eol, line}}} ->
-        {[line <> "\n"], {port, timeout}}
+        {[line <> "\n"], {port, timeout, execution_id}}
 
       {^port, {:data, {:noeol, line}}} ->
-        {[line], {port, timeout}}
+        {[line], {port, timeout, execution_id}}
 
       {^port, {:exit_status, _status}} ->
-        {:halt, {port, timeout}}
+        {:halt, {port, timeout, execution_id}}
     after
       timeout ->
         safe_close(port)
-        {:halt, {port, timeout}}
+        _ = maybe_clear_active(execution_id)
+        {:halt, {port, timeout, execution_id}}
     end
   end
+
+  defp maybe_set_active(execution_id, port) when is_binary(execution_id) and is_port(port) do
+    Control.set_active_port(execution_id, port)
+  end
+
+  defp maybe_set_active(_execution_id, _port), do: :ok
+
+  defp maybe_clear_active(execution_id) when is_binary(execution_id) do
+    Control.clear_active(execution_id)
+  end
+
+  defp maybe_clear_active(_execution_id), do: :ok
 
   defp safe_close(port) do
     if Port.info(port) != nil, do: Port.close(port)

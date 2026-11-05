@@ -13,7 +13,7 @@ defmodule LlmCore.LLM.MessagesTest do
       assert [%{"role" => "user", "content" => "hi"}] = Messages.normalize_chat(messages)
     end
 
-    # GC-2660: the assistant message's tool_calls were silently dropped by the
+    # tool_calls serialization: the assistant message's tool_calls were silently dropped by the
     # generic role/content clause, orphaning the following tool-result message
     # so providers (Anthropic via OpenRouter) rejected the whole conversation.
     test "preserves assistant tool_calls in OpenAI wire shape" do
@@ -146,7 +146,7 @@ defmodule LlmCore.LLM.MessagesTest do
             tool_calls: [
               %LlmToolkit.Tool.Call{
                 id: "call_1",
-                name: "gc_mcpclient",
+                name: "example_mcp_client",
                 arguments: %{"action" => "servers"}
               }
             ]
@@ -155,7 +155,7 @@ defmodule LlmCore.LLM.MessagesTest do
         ])
 
       assert rendered =~ "```llm_core_tool_calls"
-      assert rendered =~ "\"gc_mcpclient\""
+      assert rendered =~ "\"example_mcp_client\""
       assert rendered =~ "[tool id=call_1]"
       assert rendered =~ "\"obsidian\""
     end

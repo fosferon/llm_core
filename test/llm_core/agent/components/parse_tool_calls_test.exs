@@ -1,6 +1,6 @@
 defmodule LlmCore.Agent.Components.ParseToolCallsTest do
   @moduledoc """
-  GC-5523: the completion contract. A no-tool-call response with blank
+  empty-stop contract: the completion contract. A no-tool-call response with blank
   content is a blank stop, never a successful completion.
   """
 
@@ -31,7 +31,7 @@ defmodule LlmCore.Agent.Components.ParseToolCallsTest do
     end
   end
 
-  describe "no tool calls, blank content (GC-5523)" do
+  describe "no tool calls, blank content (empty-stop contract)" do
     test "nil content is a blank stop, not done" do
       response = %Response{content: nil, tool_calls: nil, metadata: %{finish_reason: "stop"}}
 

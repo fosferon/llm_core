@@ -53,7 +53,7 @@ defmodule LlmCore.Agent.RegistryTest do
     assert helper_agent.provider == LlmCore.LLM.Ollama
   end
 
-  describe "GC-760 regression: agent.config wins over provider.options on key collision" do
+  describe "agent config precedence regression: agent.config wins over provider.options on key collision" do
     test "agent.config fields override provider.options fields with the same key" do
       # Ensure the target atom exists at runtime so normalize_agent_config can
       # convert the string-keyed options entry. `:base_url` is used throughout
@@ -90,14 +90,14 @@ defmodule LlmCore.Agent.RegistryTest do
       assert {:ok, agent} = Registry.get(:registry_test, "collision")
 
       assert agent.config[:base_url] == "http://override.example.com",
-             "agent.config.base_url (project override) was clobbered by provider.options.base_url (GC-760)"
+             "agent.config.base_url (project override) was clobbered by provider.options.base_url (agent config precedence)"
 
       assert agent.config[:model] == "qwen2.5-coder:32b",
-             "agent.config.model override did not survive (GC-760)"
+             "agent.config.model override did not survive (agent config precedence)"
 
       # And there must be no stray string-keyed entry for the same logical key.
       refute Map.has_key?(agent.config, "base_url"),
-             "merged agent config still contains a string-keyed 'base_url' alongside the atom key (GC-760)"
+             "merged agent config still contains a string-keyed 'base_url' alongside the atom key (agent config precedence)"
     end
   end
 end

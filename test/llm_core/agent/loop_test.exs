@@ -105,7 +105,7 @@ defmodule LlmCore.Agent.LoopTest do
     end
   end
 
-  describe "run/3 blank-stop recovery (GC-5523)" do
+  describe "run/3 blank-stop recovery (empty-stop contract)" do
     test "transient blank stop recovers and completes with recovery marker" do
       llm_send =
         scripted_llm([
@@ -228,7 +228,7 @@ defmodule LlmCore.Agent.LoopTest do
     end
   end
 
-  describe "run/3 terminal_required (GC-6279)" do
+  describe "run/3 terminal_required (terminal_required contract)" do
     test "a text-only reply does not end a required-terminal turn: prose + nudge are appended and the retry completes on the terminal call" do
       parent = self()
       nudge = "Finish your tool calls, then call done."
@@ -522,7 +522,7 @@ defmodule LlmCore.Agent.LoopTest do
     end
   end
 
-  describe "run/3 terminal_required — review findings (GC-6283)" do
+  describe "run/3 terminal_required — review findings (terminal_required review findings)" do
     test "a duplicated terminal call is never dispatched; the first copy is the terminal" do
       parent = self()
       first = %Call{id: "c1", name: "done", arguments: %{"answer" => "a"}}
@@ -611,7 +611,7 @@ defmodule LlmCore.Agent.LoopTest do
     end
   end
 
-  describe "run/3 terminal_required — review findings round 2 (GC-6283)" do
+  describe "run/3 terminal_required — review findings round 2 (terminal_required review findings)" do
     test "a content-less narrated stop (structured only) pushes no nil assistant message before the nudge" do
       parent = self()
       terminal_call = %Call{id: "c", name: "done", arguments: %{"answer" => "r"}}

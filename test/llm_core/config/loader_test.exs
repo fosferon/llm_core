@@ -304,14 +304,14 @@ defmodule LlmCore.Config.LoaderTest do
     assert settings.log_provider_dispatch
   end
 
-  describe "GC-758 regression: reload_routing must not clobber TOML-configured routing" do
+  describe "bundled config loading regression: reload_routing must not clobber TOML-configured routing" do
     test "reload_routing preserves routing loaded from TOML when routing.yml is missing" do
       # Simulate the Application.start/2 sequence: reload_providers (which parses
       # TOML [routing.tasks.*] and writes to Store) is called first, then
       # reload_routing is called. If routing.yml is missing (as it is for any
       # TOML-only consumer), reload_routing must NOT overwrite the Store with
       # a fallback table.
-      config_path = temp_path("llm_core-gc758-routing.toml")
+      config_path = temp_path("llm_core-layered_config-routing.toml")
 
       File.write!(
         config_path,
@@ -343,16 +343,16 @@ defmodule LlmCore.Config.LoaderTest do
 
       # Step 2: reload_routing with a missing YAML file must leave the
       # TOML-configured routing table intact.
-      missing_yml = temp_path("missing-gc758.yml")
+      missing_yml = temp_path("missing-layered_config.yml")
       assert {:ok, _} = Loader.reload_routing(path: missing_yml)
 
       {:ok, routing_after_reload} = Store.get_routing()
 
       assert routing_after_reload.default.alias == "example",
-             "reload_routing clobbered TOML default routing with fallback (GC-758 Bug 1)"
+             "reload_routing clobbered TOML default routing with fallback (bundled config loading Bug 1)"
 
       assert Map.has_key?(routing_after_reload.rules, "help_draft"),
-             "reload_routing erased TOML-configured task routing rules (GC-758 Bug 1)"
+             "reload_routing erased TOML-configured task routing rules (bundled config loading Bug 1)"
 
       assert routing_after_reload.rules["help_draft"].alias == "example"
       assert routing_after_reload.rules["help_draft"].mode == :passthrough
@@ -383,25 +383,25 @@ defmodule LlmCore.Config.LoaderTest do
 
       :ets.delete(:llm_core_config, {:config, :routing})
 
-      missing_yml = temp_path("missing-gc758-fallback.yml")
+      missing_yml = temp_path("missing-layered_config-fallback.yml")
       assert {:ok, %RoutingTable{} = table} = Loader.reload_routing(path: missing_yml)
       assert table.default.alias == "layered"
       assert {:ok, ^table} = Store.get_routing()
     end
   end
 
-  describe "GC-758 regression: base llm_core.toml must be accessible at runtime" do
+  describe "bundled config loading regression: base llm_core.toml must be accessible at runtime" do
     test "load_config loads providers defined in the library's bundled base TOML" do
       # The library ships config/llm_core.toml with sensible defaults for
-      # anthropic/openai/ollama. Prior to GC-758 Bug 2, default_config_path/0
+      # anthropic/openai/ollama. Prior to bundled config loading Bug 2, default_config_path/0
       # resolved to `_build/<env>/lib/llm_core/config/llm_core.toml`, a path
       # that Mix does not populate, so the bundled defaults were never loaded.
       #
       # We isolate from any project/global config by pointing LLM_CORE_PROJECT_ROOT
       # and LLM_CORE_HOME at an empty tmp dir, then assert load_config still
       # returns the base providers.
-      tmp_root = temp_dir("llm_core_gc758_isolated_root")
-      tmp_home = temp_dir("llm_core_gc758_isolated_home")
+      tmp_root = temp_dir("llm_core_layered_config_isolated_root")
+      tmp_home = temp_dir("llm_core_layered_config_isolated_home")
 
       prev_env = %{
         "LLM_CORE_CONFIG" => System.get_env("LLM_CORE_CONFIG"),
@@ -434,7 +434,7 @@ defmodule LlmCore.Config.LoaderTest do
       providers = Map.get(config, "providers", %{})
 
       assert Map.has_key?(providers, "anthropic"),
-             "bundled base config did not load — anthropic provider missing (GC-758 Bug 2)"
+             "bundled base config did not load — anthropic provider missing (bundled config loading Bug 2)"
 
       assert get_in(providers, ["anthropic", "module"]) == "LlmCore.LLM.Anthropic"
       assert get_in(providers, ["openai", "module"]) == "LlmCore.LLM.OpenAI"
