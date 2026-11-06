@@ -195,6 +195,18 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   end
 
   @impl true
+  def handle_info({:EXIT, _pid, reason}, state) do
+    Logger.debug("Hindsight write buffer received exit signal: #{inspect(reason)}")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(message, state) do
+    Logger.debug("Hindsight write buffer ignored unexpected message: #{inspect(message)}")
+    {:noreply, state}
+  end
+
+  @impl true
   def terminate(_reason, state) do
     # Persist buffer to disk
     if state.buffer != [] do

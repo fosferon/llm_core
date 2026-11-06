@@ -245,6 +245,28 @@ defmodule LlmCore.Memory.Hindsight.WriteBufferTest do
     end
   end
 
+  test "a graceful :shutdown persists buffered items to the global buffer file" do
+    supervisor = LlmCore.Memory.Hindsight.Supervisor
+    path = Path.join(LlmCore.Paths.global_memory_dir(), "hindsight_buffer.jsonl")
+    marker = "shutdown-behaviour-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      :sys.resume(supervisor)
+      wait_until(fn -> Process.whereis(WriteBuffer) end)
+      WriteBuffer.clear_buffer()
+      File.rm(path)
+    end)
+
+    File.rm(path)
+    WriteBuffer.buffer(marker, %{source: "test"}, bank_id: "bank1")
+
+    :sys.suspend(supervisor)
+    GenServer.stop(WriteBuffer, :shutdown)
+
+    assert File.exists?(path)
+    assert File.read!(path) =~ marker
+  end
+
   test "shutdown persistence redacts credentials and restricts file permissions" do
     previous_home = System.get_env("LLM_CORE_HOME")
     temp_home = Path.join(System.tmp_dir!(), "llm-core-buffer-#{System.unique_integer()}")
