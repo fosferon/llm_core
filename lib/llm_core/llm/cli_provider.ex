@@ -195,6 +195,14 @@ defmodule LlmCore.LLM.CLIProvider do
       # Stream
       {:ok, stream} = CLIProvider.stream(provider, "Write a story")
 
+  ## Options
+
+    * `:execution_id` — any term. When set, `send/3` and `stream/3` register
+      the running CLI port with `LlmCore.Executor.Control` while the call is
+      active, so a HALT can look it up and interrupt it. The registration is
+      cleared when the call completes (or the stream halts). The default
+      `nil` disables registration.
+
   ## Custom Provider (no code needed)
 
       config = %CLIProvider.Config{
@@ -458,6 +466,15 @@ defmodule LlmCore.LLM.CLIProvider do
   @spec provider_type(t()) :: :cli
   def provider_type(%__MODULE__{}), do: :cli
 
+  @doc """
+  Runs a prompt and returns the complete response.
+
+  ## Options
+
+    * `:execution_id` — any term. Registers the running port with
+      `LlmCore.Executor.Control` so a HALT can interrupt it; cleared when the
+      call completes.
+  """
   @spec send(t(), LlmCore.LLM.Provider.prompt(), keyword()) ::
           {:ok, Response.t()} | {:error, Error.t()}
   def send(provider, prompt, opts \\ []) do
@@ -468,6 +485,15 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
+  @doc """
+  Starts a prompt and returns a stream of output chunks.
+
+  ## Options
+
+    * `:execution_id` — any term. Registers the running port with
+      `LlmCore.Executor.Control` when enumeration starts so a HALT can
+      interrupt it; cleared when the stream halts.
+  """
   @spec stream(t(), LlmCore.LLM.Provider.prompt(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream(provider, prompt, opts \\ []) do
