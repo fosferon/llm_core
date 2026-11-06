@@ -22,7 +22,7 @@ defmodule LlmCore.Agent.ToolDispatch.PipelineTest do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp make_call(name \\ "test_tool", args \\ %{}) do
+  defp make_call(name, args \\ %{}) do
     %Call{id: "call_1", name: name, arguments: args}
   end
 
@@ -41,7 +41,7 @@ defmodule LlmCore.Agent.ToolDispatch.PipelineTest do
     end
   end
 
-  defp make_recipe(opts \\ []) do
+  defp make_recipe(opts) do
     serial = Keyword.get(opts, :serial, [])
     parallel = Keyword.get(opts, :parallel, [])
     compose = Keyword.get(opts, :compose, nil)

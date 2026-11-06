@@ -15,7 +15,9 @@ defmodule LlmCore.MixProject do
       package: package(),
       source_url: @source_url,
       docs: docs(),
-      aliases: aliases()
+      aliases: aliases(),
+      # test/support/*.exs is required from test_helper.exs, not run as tests.
+      test_ignore_filters: [&String.starts_with?(&1, "test/support/")]
     ]
   end
 

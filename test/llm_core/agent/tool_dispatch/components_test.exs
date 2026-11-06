@@ -32,7 +32,7 @@ defmodule LlmCore.Agent.ToolDispatch.ComponentsTest do
     fn %Call{} -> {:error, "tool failed"} end
   end
 
-  defp base_event(overrides \\ []) do
+  defp base_event(overrides) do
     defaults = %{
       call: make_call(),
       resolve_fn: ok_resolve_fn(),
