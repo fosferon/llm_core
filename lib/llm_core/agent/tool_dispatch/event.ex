@@ -12,8 +12,10 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
     * `call` — The original `%Call{}` that triggered dispatch
     * `resolve_fn` — Function to execute individual tool calls
     * `recipe` — Recipe function or `nil` for passthrough
-    * `timeout` — per-dispatch budget in milliseconds
-    * `deadline` — monotonic deadline derived from `timeout`
+    * `timeout` — per-dispatch budget in milliseconds, or `:infinity` when
+      the caller passed no budget
+    * `deadline` — monotonic deadline derived from `timeout`; `nil` when
+      there is no deadline
 
   ### Pipeline state — populated by stages
 
@@ -41,7 +43,7 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
           call: Call.t() | nil,
           resolve_fn: (Call.t() -> {:ok, String.t()} | {:error, String.t()}) | nil,
           recipe: (map() -> map()) | nil,
-          timeout: pos_integer(),
+          timeout: pos_integer() | :infinity,
           deadline: integer() | nil,
           strategy: :passthrough | :recipe,
           plan: map() | nil,
@@ -70,7 +72,7 @@ defmodule LlmCore.Agent.ToolDispatch.Event do
     :result,
     :error,
     strategy: :passthrough,
-    timeout: 300_000,
+    timeout: :infinity,
     serial_results: [],
     serial_context: %{},
     total_parallel: 0,

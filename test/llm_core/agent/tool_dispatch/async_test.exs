@@ -6,6 +6,7 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
   alias LlmCore.Agent.Pipeline.ToolDispatch, as: ToolDispatchPipeline
   alias LlmCore.Agent.ToolDispatch.Components.ExecuteOneCall
   alias LlmCore.Agent.ToolDispatch.Event
+  alias LlmCore.Agent.ToolDispatch.Execution
   alias LlmToolkit.Tool.Call
 
   defmodule Resolver do
@@ -127,6 +128,33 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
     assert Process.whereis(ToolDispatchPipeline) == pipeline_pid
   end
 
+  test "with no tool_timeout a sub-call longer than ALF's default succeeds" do
+    alf_default = Application.get_env(:alf, :default_timeout, 10_000)
+    assert alf_default < 400, "test config must lower ALF's default timeout"
+
+    started_at = System.monotonic_time(:millisecond)
+
+    resolve_fn = fn %Call{name: "slow"} ->
+      Process.sleep(400)
+      {:ok, "no-deadline result after #{System.monotonic_time(:millisecond) - started_at}ms"}
+    end
+
+    # No tool_timeout key: the Context default is :infinity.
+    ctx = %Context{
+      tool_calls: [%Call{id: "call_no_timeout", name: "slow_dispatch", arguments: %{}}],
+      resolve_tool: resolve_fn,
+      resolver_module: Resolver,
+      tool_results: [],
+      trace: []
+    }
+
+    {elapsed_us, result} = :timer.tc(fn -> DispatchTools.call(ctx, []) end)
+
+    assert [%{content: content}] = result.tool_results
+    assert content =~ "no-deadline result"
+    assert elapsed_us >= 400_000
+  end
+
   test "exceeding the per-call budget returns a bounded typed timeout" do
     resolve_fn = fn %Call{name: "slow"} ->
       Process.sleep(2_000)
@@ -140,6 +168,28 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
     assert [%{content: content}] = result.tool_results
     assert content == "Tool call timed out after 100ms"
     assert elapsed_us < 1_000_000
+  end
+
+  test "a queued event past its deadline reports the configured budget, not 0ms" do
+    event = %Event{
+      call: %Call{id: "call", name: "slow", arguments: %{}},
+      resolve_fn: fn _ -> flunk("the queued call must not run") end,
+      timeout: 250,
+      deadline: System.monotonic_time(:millisecond) - 50
+    }
+
+    assert {:error, {:timeout, 250}} = Execution.run(event, fn -> :never end)
+  end
+
+  test "the execution helper accepts an :infinity budget" do
+    event = %Event{
+      call: %Call{id: "call", name: "slow", arguments: %{}},
+      resolve_fn: fn _ -> :ok end,
+      timeout: :infinity,
+      deadline: nil
+    }
+
+    assert :done = Execution.run(event, fn -> :done end)
   end
 
   test "the execution helper reports a typed timeout" do
@@ -156,6 +206,47 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
       )
 
     assert %{error: {:timeout, 100}} = result.step_result
+  end
+
+  test "a genuine timeout returns the typed timeout without direct fallback" do
+    test_pid = self()
+
+    resolve_fn = fn %Call{name: "slow"} ->
+      send(test_pid, :resolved_in_pipeline)
+      Process.sleep(2_000)
+      {:ok, "too late"}
+    end
+
+    ctx = context("slow_dispatch", resolve_fn, tool_timeout: 100)
+    result = DispatchTools.call(ctx, [])
+
+    assert [%{content: content}] = result.tool_results
+    assert content == "Tool call timed out after 100ms"
+    assert_received :resolved_in_pipeline
+    refute_received :resolved_in_pipeline
+  end
+
+  test "falls back to direct execution when the pipeline cannot be started" do
+    stop_pipeline()
+
+    # Take ALF's dynamic supervisor away so starting the shared pipeline fails.
+    :ok = Supervisor.terminate_child(ALF.Supervisor, ALF.DynamicSupervisor)
+
+    on_exit(fn ->
+      if Process.whereis(ALF.DynamicSupervisor) == nil do
+        Supervisor.restart_child(ALF.Supervisor, ALF.DynamicSupervisor)
+      end
+    end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        result =
+          DispatchTools.call(context("slow_dispatch", fn _ -> {:ok, "direct result"} end, []), [])
+
+        assert [%{content: "direct result"}] = result.tool_results
+      end)
+
+    assert log =~ "falling back to direct execution"
   end
 
   test "parallel fan-out returns results in the recipe's original order" do

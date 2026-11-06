@@ -31,7 +31,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.DirectResolve do
       {:error, {:timeout, timeout_ms}} ->
         %{
           event
-          | result: "Tool call timed out after #{timeout_ms}ms",
+          | result: timeout_content(timeout_ms),
             status: :error,
             error: {:timeout, timeout_ms}
         }
@@ -50,4 +50,7 @@ defmodule LlmCore.Agent.ToolDispatch.Components.DirectResolve do
         %{event | result: "Error: #{inspect(reason)}", status: :error, error: reason}
     end
   end
+
+  defp timeout_content(:infinity), do: "Tool call timed out"
+  defp timeout_content(timeout_ms), do: "Tool call timed out after #{timeout_ms}ms"
 end

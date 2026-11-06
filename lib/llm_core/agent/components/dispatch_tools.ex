@@ -28,7 +28,9 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   alias LlmToolkit.Tool.Call
   alias LlmToolkit.Tool.Result
 
-  @default_tool_timeout 300_000
+  require Logger
+
+  @default_tool_timeout :infinity
   @alf_timeout_grace_ms 1_000
 
   @doc """
@@ -118,22 +120,51 @@ defmodule LlmCore.Agent.Components.DispatchTools do
       resolve_fn: resolve_fn,
       recipe: recipe,
       timeout: timeout,
-      deadline: System.monotonic_time(:millisecond) + timeout
+      deadline: deadline(timeout)
     }
 
     # The pipeline is shared by every caller. Start it in async mode if it is
     # not running and never stop or restart it here: another caller may have
-    # in-flight work.
-    :ok = ToolDispatchPipeline.ensure_started()
+    # in-flight work. If the pipeline cannot be started at all, execute the
+    # call directly as 0.9.2 did instead of failing the tool call.
+    case ensure_pipeline_started() do
+      :ok ->
+        run_pipeline(call, dispatch_event, timeout)
 
+      {:error, reason} ->
+        Logger.warning(
+          "ToolDispatch pipeline unavailable (#{inspect(reason)}); " <>
+            "falling back to direct execution for #{call.name}"
+        )
+
+        execute_one(call, resolve_fn)
+    end
+  end
+
+  defp ensure_pipeline_started do
+    case ToolDispatchPipeline.ensure_started() do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+      other -> {:error, other}
+    end
+  rescue
+    exception -> {:error, exception}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp run_pipeline(call, dispatch_event, timeout) do
     # Give ALF enough time to receive the bounded error the execution helper
-    # produces. The helper, not ALF's default, owns the caller's budget.
-    case ToolDispatchPipeline.call(dispatch_event, timeout: timeout + @alf_timeout_grace_ms) do
-      %DispatchEvent{status: :error, error: {:timeout, timeout_ms}} ->
+    # produces. The helper, not ALF's default, owns the caller's budget; with
+    # no caller budget both waits are unbounded.
+    alf_timeout = if timeout == :infinity, do: :infinity, else: timeout + @alf_timeout_grace_ms
+
+    case ToolDispatchPipeline.call(dispatch_event, timeout: alf_timeout) do
+      %DispatchEvent{status: :error, error: {:timeout, _timeout_ms}} ->
         %Result{
           tool_call_id: call.id,
           name: call.name,
-          content: "Tool call timed out after #{timeout_ms}ms"
+          content: timeout_content(timeout)
         }
 
       %DispatchEvent{status: :error, error: error} ->
@@ -146,6 +177,13 @@ defmodule LlmCore.Agent.Components.DispatchTools do
       %DispatchEvent{status: :ok, result: content} when is_binary(content) and content != "" ->
         %Result{tool_call_id: call.id, name: call.name, content: content}
 
+      %ALF.ErrorIP{error: :timeout} ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: timeout_content(timeout)
+        }
+
       %ALF.ErrorIP{error: error} ->
         %Result{
           tool_call_id: call.id,
@@ -153,11 +191,14 @@ defmodule LlmCore.Agent.Components.DispatchTools do
           content: "Dispatch pipeline error: #{inspect(error)}"
         }
 
+      # Defensive: ALF returns nil when its own wait expires before the
+      # pipeline emits a result. With an explicit :infinity wait this cannot
+      # happen, but it can if the grace window is somehow exhausted first.
       nil ->
         %Result{
           tool_call_id: call.id,
           name: call.name,
-          content: "Tool call timed out after #{timeout}ms"
+          content: timeout_content(timeout)
         }
 
       other ->
@@ -168,13 +209,25 @@ defmodule LlmCore.Agent.Components.DispatchTools do
         }
     end
   rescue
-    e ->
+    exception ->
       %Result{
         tool_call_id: call.id,
         name: call.name,
-        content: "Dispatch error: #{Exception.message(e)}"
+        content: "Dispatch error: #{Exception.message(exception)}"
       }
   end
+
+  defp deadline(:infinity), do: nil
+
+  defp deadline(timeout) when is_integer(timeout),
+    do: System.monotonic_time(:millisecond) + timeout
+
+  defp timeout_content(:infinity), do: "Tool call timed out"
+
+  defp timeout_content(timeout) when is_integer(timeout),
+    do: "Tool call timed out after #{timeout}ms"
+
+  defp tool_timeout(%Context{tool_timeout: :infinity}), do: :infinity
 
   defp tool_timeout(%Context{tool_timeout: timeout}) when is_integer(timeout) and timeout > 0,
     do: timeout

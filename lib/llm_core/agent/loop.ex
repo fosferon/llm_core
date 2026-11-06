@@ -47,7 +47,7 @@ defmodule LlmCore.Agent.Loop do
           | {:resolve_tool,
              (LlmToolkit.Tool.Call.t() -> {:ok, String.t()} | {:error, String.t()})}
           | {:resolver_module, module() | nil}
-          | {:tool_timeout, pos_integer()}
+          | {:tool_timeout, pos_integer() | :infinity}
           | {:max_iterations, pos_integer()}
           | {:on_iteration, (Context.t() -> :ok) | nil}
           | {:pipeline_opts, keyword()}
@@ -62,7 +62,7 @@ defmodule LlmCore.Agent.Loop do
         ]
 
   @default_max_iterations 10
-  @default_tool_timeout 300_000
+  @default_tool_timeout :infinity
 
   # Bounded recovery for degenerate empty-stop responses:
   # a provider returns HTTP success with finish_reason "stop", blank
@@ -103,7 +103,8 @@ defmodule LlmCore.Agent.Loop do
         When set, `DispatchTools` checks for dispatch recipes via
         `resolver_module.dispatch_recipe/1`.
       * `:tool_timeout` — maximum time in milliseconds for one tool dispatch,
-        including all recipe sub-calls (default: #{@default_tool_timeout})
+        including all recipe sub-calls. Defaults to `:infinity`: when the
+        caller passes no budget, there is no deadline.
       * `:max_iterations` — iteration ceiling (default: #{@default_max_iterations})
       * `:on_iteration` — optional callback invoked with the pipeline context
         after each iteration
@@ -177,11 +178,15 @@ defmodule LlmCore.Agent.Loop do
 
     tool_timeout =
       case Keyword.get(opts, :tool_timeout, @default_tool_timeout) do
+        :infinity ->
+          :infinity
+
         timeout when is_integer(timeout) and timeout > 0 ->
           timeout
 
         other ->
-          raise ArgumentError, ":tool_timeout must be a positive integer, got: #{inspect(other)}"
+          raise ArgumentError,
+                ":tool_timeout must be a positive integer or :infinity, got: #{inspect(other)}"
       end
 
     max_blank_stops = Keyword.get(opts, :max_blank_stops, @default_max_blank_stops)

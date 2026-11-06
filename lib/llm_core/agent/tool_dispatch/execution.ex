@@ -5,6 +5,10 @@ defmodule LlmCore.Agent.ToolDispatch.Execution do
   # monitored process so a hung tool can be killed without taking down the
   # pipeline worker or the caller. Exceptions are returned as typed errors,
   # never raised across the pipeline.
+  #
+  # The configured budget — not the remaining slice — is what a timeout
+  # reports. A queued fan-out event that enters this module after its deadline
+  # therefore still reports the caller's budget instead of "after 0ms".
 
   alias LlmCore.Agent.ToolDispatch.Event
 
@@ -13,19 +17,26 @@ defmodule LlmCore.Agent.ToolDispatch.Execution do
   @doc """
   Runs `fun` with the remaining budget carried by `event`.
 
-  Returns whatever `fun` returns, or `{:error, {:timeout, remaining_ms}}`
-  when the budget is exhausted. `{:error, {:execution_error, reason}}` is
-  returned when the spawned call raises or exits.
+  Returns whatever `fun` returns, or `{:error, {:timeout, configured_ms}}`
+  when the budget is exhausted. A `:infinity` budget never times out.
+  `{:error, {:execution_error, reason}}` is returned when the spawned call
+  raises or exits.
   """
   @spec run(Event.t(), (-> result())) :: result()
   def run(%Event{} = event, fun) when is_function(fun, 0) do
     case remaining_ms(event) do
-      remaining when remaining > 0 -> execute(fun, remaining)
-      _ -> {:error, {:timeout, 0}}
+      :infinity ->
+        execute(fun, :infinity, :infinity)
+
+      remaining when is_integer(remaining) and remaining > 0 ->
+        execute(fun, remaining, budget_ms(event))
+
+      _ ->
+        {:error, {:timeout, budget_ms(event)}}
     end
   end
 
-  defp execute(fun, timeout_ms) do
+  defp execute(fun, timeout_ms, budget_ms) do
     parent = self()
     ref = make_ref()
 
@@ -52,7 +63,7 @@ defmodule LlmCore.Agent.ToolDispatch.Execution do
           0 -> :ok
         end
 
-        {:error, {:timeout, timeout_ms}}
+        {:error, {:timeout, budget_ms}}
     end
   end
 
@@ -63,6 +74,12 @@ defmodule LlmCore.Agent.ToolDispatch.Execution do
   catch
     kind, reason -> {:error, {:execution_error, {kind, reason}}}
   end
+
+  defp budget_ms(%Event{timeout: :infinity}), do: :infinity
+  defp budget_ms(%Event{timeout: timeout}) when is_integer(timeout) and timeout > 0, do: timeout
+  defp budget_ms(%Event{}), do: :infinity
+
+  defp remaining_ms(%Event{deadline: nil, timeout: :infinity}), do: :infinity
 
   defp remaining_ms(%Event{deadline: nil, timeout: timeout}) when is_integer(timeout) do
     timeout
