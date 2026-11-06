@@ -7,7 +7,7 @@
 # The directory Mix downloads your dependencies sources to.
 /deps/
 
-# Where ExDoc output generated docs.
+# Where third-party dependencies like ExDoc output generated docs.
 /doc/
 
 # Ignore .fetch files in case you like to edit your project deps locally.
@@ -26,8 +26,26 @@ llm_core-*.tar
 /tmp/
 **/.DS_Store
 
+# Internal assets and agent handoff docs
+/_assets/
+/_agents/
+
+# AI assistant config
+**/CLAUDE.md
+/.codex/
+
+# Legacy DevMan config
+/.devman/
+
 # Environment files
 .env*
 
-# Local tool and editor artifacts
+# Claude Code
+/.claude/
+
+# Tool artifacts
+/.claude-flow/
+/.serena/
+/.swarm/
+.mcp.json
 .logs
