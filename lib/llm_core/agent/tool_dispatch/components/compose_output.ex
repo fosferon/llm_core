@@ -40,6 +40,9 @@ defmodule LlmCore.Agent.ToolDispatch.Components.ComposeOutput do
         default_compose(event)
       end
 
+    # A timeout in any fanned-out sub-call fails the whole step. The composed
+    # partial output is kept in the event but DispatchTools reports the typed
+    # timeout instead; partial results are never returned to the caller.
     case Enum.find_value(event.errors, fn
            %{error: {:timeout, timeout_ms}} -> {:timeout, timeout_ms}
            _ -> nil

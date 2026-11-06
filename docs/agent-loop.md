@@ -150,7 +150,13 @@ ALF's 10 s default from cutting long calls. A finite timeout is enforced
 around each sub-call and returns the typed reason `{:timeout, configured_ms}`;
 the loop surfaces it as `Tool call timed out after Nms`. A genuine timeout is
 never retried through the direct-execution fallback; that fallback is only for
-a pipeline that cannot be started.
+a pipeline that cannot be started, and it applies the same finite budget when
+one is set.
+
+Timeout handling is all-or-nothing across a fan-out. When a finite
+`:tool_timeout` expires for one call in a fan-out, the whole tool step reports
+the timeout; successful sibling results are not returned. Callers never
+receive a partially composed result from a timed-out step.
 
 ## Integration Example
 

@@ -66,6 +66,8 @@ All notable changes to this project will be documented in this file.
   the preferred `:caller_default` spelling, and the current module layout in
   both architecture guides. A dangling sentence in the telemetry section was
   removed.
+- When a finite `:tool_timeout` expires for one call in a fan-out, the whole
+  tool step reports the timeout; partial results are not returned.
 
 ### Deprecated
 
