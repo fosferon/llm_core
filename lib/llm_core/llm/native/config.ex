@@ -11,7 +11,7 @@ defmodule LlmCore.LLM.Native.Config do
       cascade = ["my_local", "my_cloud"]
 
       [native.default_models]
-      my_cloud = "some-model-id"
+      my_cloud = "gpt-4o-mini"
 
       [[native.model_routing]]
       pattern = "some-substring"

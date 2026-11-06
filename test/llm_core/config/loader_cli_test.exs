@@ -2,6 +2,7 @@ defmodule LlmCore.Config.LoaderCLITest do
   use ExUnit.Case, async: false
 
   alias LlmCore.Config.{Loader, Store}
+  alias LlmCore.LLM.CLIProvider
   alias LlmCore.Provider.Registry
 
   setup do
@@ -52,7 +53,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert definition.cli_config.binary == "echo"
       assert definition.cli_config.name == :echo_test
       assert definition.cli_config.default_model == "echo-v1"
-      assert definition.cli_config.model_resolution == :caller_default
+      assert definition.cli_config.model_resolution == :gc_default
       assert definition.cli_config.flags == %{model: "--model"}
       assert definition.aliases == ["echo", "echo-test"]
       assert definition.available? == true
@@ -189,7 +190,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert {:ok, cli_configs} = Store.fetch(:config, :cli_providers)
       assert Map.has_key?(cli_configs, :store_test)
       assert cli_configs[:store_test].binary == "echo"
-      assert cli_configs[:store_test].model_resolution == :caller_default
+      assert cli_configs[:store_test].model_resolution == :gc_default
     end
 
     test "CLI and module providers coexist" do
@@ -293,7 +294,7 @@ defmodule LlmCore.Config.LoaderCLITest do
       assert cfg.flags[:model] == "--model"
       assert cfg.flags[:system_prompt_file] == "--agent-file"
       assert cfg.preflight == %{help_args: ["--help"], expect_in_help: ["--model"]}
-      assert cfg.model_resolution == :caller_default
+      assert cfg.model_resolution == :gc_default
 
       # default_model from provider level overrides cli level
       assert def.default_model == "rich-v2"
@@ -540,7 +541,7 @@ defmodule LlmCore.Config.LoaderCLITest do
     end
   end
 
-  test "model_resolution documents :caller_default and keeps :gc_default as an alias" do
+  test "model_resolution accepts :caller_default and :gc_default explicitly and keeps the implicit value" do
     config_path = temp_path("cli_model_resolution.toml")
     on_exit(fn -> File.rm_rf(config_path) end)
 
@@ -560,11 +561,60 @@ defmodule LlmCore.Config.LoaderCLITest do
     binary = "echo"
     default_model = "model-v1"
     model_resolution = "gc_default"
+
+    [providers.implicit_cli]
+    type = "cli"
+
+    [providers.implicit_cli.cli]
+    binary = "echo"
+    default_model = "model-v1"
     """)
 
     assert {:ok, providers} = Loader.reload_providers(path: config_path)
     assert providers["caller_default_cli"].cli_config.model_resolution == :caller_default
     assert providers["gc_default_cli"].cli_config.model_resolution == :gc_default
+    assert providers["implicit_cli"].cli_config.model_resolution == :gc_default
+  end
+
+  test "legacy stdin prompt transport is accepted, mapped to last, and warns once" do
+    :persistent_term.erase({Loader, :stdin_prompt_transport_warned})
+
+    config_path = temp_path("cli_stdin_transport.toml")
+    on_exit(fn -> File.rm_rf(config_path) end)
+
+    File.write!(config_path, """
+    [providers.legacy_stdin]
+    type = "cli"
+    enabled = true
+
+    [providers.legacy_stdin.cli]
+    binary = "echo"
+    prompt_transport = "stdin"
+
+    [providers.legacy_stdin.cli.flags]
+    model = "--model"
+    """)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, providers} = Loader.reload_providers(path: config_path)
+        assert Map.has_key?(providers, "legacy_stdin")
+
+        cfg = providers["legacy_stdin"].cli_config
+        assert cfg.prompt_transport == :last
+
+        provider = CLIProvider.from_config(cfg)
+        args = CLIProvider.build_args(provider, "hello", [])
+        assert List.last(args) == "hello"
+        refute "--flag-that-does-not-exist" in args
+      end)
+
+    assert log =~ "prompt_transport = \"stdin\""
+    assert log =~ "deprecated"
+    assert log =~ "removed in 0.10"
+
+    refute ExUnit.CaptureLog.capture_log(fn -> Loader.reload_providers(path: config_path) end) =~
+             "prompt_transport = \"stdin\""
   end
 
   defp temp_path(name) do

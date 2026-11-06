@@ -14,10 +14,13 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `provider_type` — always `:cli`
     * `default_timeout` — timeout in ms (default: 1_800_000 = 30 min)
     * `default_model` — model string used when the caller delegates model
-      selection (`:caller_default`)
+      selection (`:gc_default`, or its preferred spelling `:caller_default`)
     * `model_resolution` — how model selection works for this CLI provider:
-      `:caller_default` (default), `:provider_runtime`, or `:explicit_only`.
-      The deprecated alias `:gc_default` is accepted and behaves identically.
+      `:gc_default` (implicit default in 0.9.x), `:provider_runtime`, or
+      `:explicit_only`. `:caller_default` is the preferred spelling and is
+      accepted as input; it behaves identically and reads back as
+      `:caller_default` when configured explicitly. The implicit value flips
+      to `:caller_default` in 0.10.
     * `flags` — map of opt key → CLI flag (e.g. `%{model: "--model", auto: "--auto"}`)
     * `prompt_position` — `:last` (default) or `:flagged` (e.g. claude uses `-p`)
     * `prompt_flag` — flag before the prompt when `prompt_position == :flagged` (e.g. `-p`)
@@ -25,8 +28,8 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     * `stdin_hack` — wrap with `/bin/sh -c 'exec "$0" "$@" < /dev/null'` (claude needs this)
     * `install_hint` — shown in not_installed error message
     * `prompt_transport` — optional semantic prompt transport (`:last`, `:flagged`).
-      A `"stdin"` value is rejected by the config loader; it was never wired to
-      the process input.
+      The legacy `"stdin"` value is accepted through 0.9.x, mapped to `:last`,
+      and logs a one-time deprecation warning; it is removed in 0.10.
     * `system_prompt_transport` — optional semantic system prompt strategy
     * `cwd_flag` — optional explicit cwd flag for capability introspection
     * `add_dir_flag` — optional explicit add-dir flag for capability introspection
@@ -101,7 +104,7 @@ defmodule LlmCore.LLM.CLIProvider.Config do
           prefix_args: [String.t()],
           stdin_hack: boolean(),
           install_hint: String.t() | nil,
-          prompt_transport: :last | :flagged | nil,
+          prompt_transport: :last | :flagged | :stdin | nil,
           system_prompt_transport: :flag | :file_flag | :inline_fallback | :unsupported | nil,
           cwd_flag: String.t() | nil,
           add_dir_flag: String.t() | nil,
@@ -139,7 +142,7 @@ defmodule LlmCore.LLM.CLIProvider.Config do
     provider_type: :cli,
     default_timeout: 1_800_000,
     default_model: nil,
-    model_resolution: :provider_runtime,
+    model_resolution: :gc_default,
     flags: %{},
     prompt_position: :last,
     prefix_args: [],
@@ -785,6 +788,11 @@ defmodule LlmCore.LLM.CLIProvider do
     #{prompt}
     """)
   end
+
+  # `:stdin` was never wired to the process input. It remains accepted for one
+  # more 0.9.x release as an alias for `:last`; the loader logs the deprecation
+  # warning when the value comes from TOML.
+  defp effective_prompt_transport(%Config{prompt_transport: :stdin}), do: :last
 
   defp effective_prompt_transport(%Config{prompt_transport: transport})
        when transport in [:last, :flagged],

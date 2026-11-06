@@ -27,7 +27,7 @@ defmodule LlmCore.LLM.Native do
       {:ok, response} = LlmCore.LLM.Native.send(task,
         system_prompt_file: "/path/to/agent.md",
         cwd: "/path/to/project",
-        model: "my-model-id"
+        model: "claude-3-5-sonnet"
       )
   """
 

@@ -25,7 +25,7 @@ defmodule LlmCore.Provider.Definition do
 
     field(
       :model_resolution,
-      :caller_default | :gc_default | :provider_runtime | :explicit_only | nil,
+      :gc_default | :caller_default | :provider_runtime | :explicit_only | nil,
       default: nil
     )
 

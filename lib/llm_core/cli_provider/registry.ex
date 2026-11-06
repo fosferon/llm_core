@@ -61,7 +61,7 @@ defmodule LlmCore.CLIProvider.Registry do
           available?: boolean(),
           install_hint: String.t() | nil,
           default_model: String.t() | nil,
-          model_resolution: :caller_default | :gc_default | :provider_runtime | :explicit_only,
+          model_resolution: :gc_default | :caller_default | :provider_runtime | :explicit_only,
           capabilities: map(),
           supports_auto_approve?: boolean(),
           supports_sandbox_bypass?: boolean(),

@@ -440,6 +440,23 @@ defmodule LlmCore.Config.LoaderTest do
       assert get_in(providers, ["openai", "module"]) == "LlmCore.LLM.OpenAI"
       assert get_in(providers, ["ollama", "module"]) == "LlmCore.LLM.Ollama"
     end
+
+    test "bundled droid loads without a model and dispatch args omit --model" do
+      assert {:ok, _providers} = Loader.reload_providers([])
+
+      assert {:ok, entry} = LlmCore.CLIProvider.Registry.fetch(:droid)
+      assert entry.default_model == nil
+      assert entry.model_resolution == :caller_default
+
+      assert {:ok, config} = LlmCore.LLM.CLIProvider.config(:droid)
+      assert config.default_model == nil
+
+      provider = LlmCore.LLM.CLIProvider.from_config(config)
+      args = LlmCore.LLM.CLIProvider.build_args(provider, "hello", [])
+
+      refute "--model" in args
+      assert List.last(args) == "hello"
+    end
   end
 
   defp temp_path(name) do

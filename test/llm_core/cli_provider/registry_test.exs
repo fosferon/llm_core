@@ -61,7 +61,38 @@ defmodule LlmCore.CLIProvider.RegistryTest do
       custom = Enum.find(entries, &(&1.id == :custom_cli))
       assert custom.binary == "echo"
       assert custom.default_model == "custom-v1"
-      assert custom.model_resolution == :caller_default
+      assert custom.model_resolution == :gc_default
+    end
+
+    test "explicit model_resolution spellings are preserved" do
+      config_path = temp_path("reg_model_resolution.toml")
+      on_exit(fn -> File.rm_rf(config_path) end)
+
+      File.write!(config_path, """
+      [providers.explicit_caller_cli]
+      type = "cli"
+
+      [providers.explicit_caller_cli.cli]
+      binary = "echo"
+      default_model = "model-v1"
+      model_resolution = "caller_default"
+
+      [providers.explicit_gc_cli]
+      type = "cli"
+
+      [providers.explicit_gc_cli.cli]
+      binary = "echo"
+      default_model = "model-v1"
+      model_resolution = "gc_default"
+      """)
+
+      {:ok, _} = Loader.reload_providers(path: config_path)
+
+      assert {:ok, caller} = Registry.fetch(:explicit_caller_cli)
+      assert caller.model_resolution == :caller_default
+
+      assert {:ok, gc} = Registry.fetch(:explicit_gc_cli)
+      assert gc.model_resolution == :gc_default
     end
 
     test "entries have expected metadata fields" do
@@ -188,7 +219,7 @@ defmodule LlmCore.CLIProvider.RegistryTest do
 
       assert {:ok, entry} = Registry.fetch(:gemini_cli)
       assert entry.default_model == "overridden-gemini"
-      assert entry.model_resolution == :caller_default
+      assert entry.model_resolution == :gc_default
       assert entry.binary == "echo"
 
       assert {:ok, provider} = Registry.resolve(:gemini_cli)

@@ -31,20 +31,17 @@ sample_rate = 1.0
 enable_logger = true
 logger_level = "info"
 
-# Provider default_model values are placeholders so the package ships no
-# environment-specific model choice. Set a real id in your project or home
-# layer (or pass :model per call).
 [providers.anthropic]
 module = "LlmCore.LLM.Anthropic"
 type = "cloud"
 enabled = true
-default_model = "anthropic-model-id"
+default_model = "claude-3-5-sonnet"
 aliases = ["anthropic", "claude"]
 cost_tier = "premium"
 
 [providers.anthropic.agent]
 name = "claude"
-config = {model = "anthropic-model-id", temperature = 0.2}
+config = {model = "claude-3-5-sonnet", temperature = 0.2}
 
 [providers.anthropic.auth]
 api_key_env = "ANTHROPIC_API_KEY"
@@ -59,13 +56,13 @@ streaming = true
 module = "LlmCore.LLM.OpenAI"
 type = "cloud"
 enabled = true
-default_model = "openai-model-id"
+default_model = "gpt-4o-mini"
 aliases = ["openai", "gpt"]
 cost_tier = "standard"
 
 [providers.openai.agent]
 name = "openai"
-config = {model = "openai-model-id", temperature = 0.1}
+config = {model = "gpt-4o-mini", temperature = 0.1}
 
 [providers.openai.auth]
 api_key_env = "OPENAI_API_KEY"
@@ -80,13 +77,13 @@ streaming = true
 module = "LlmCore.LLM.Ollama"
 type = "local"
 enabled = true
-default_model = "ollama-model-id"
+default_model = "llama3.1"
 aliases = ["ollama", "local"]
 cost_tier = "local"
 
 [providers.ollama.agent]
 name = "ollama"
-config = {model = "ollama-model-id", temperature = 0.7}
+config = {model = "llama3.1", temperature = 0.7}
 
 [providers.ollama.options]
 base_url = "${OLLAMA_URL:http://localhost:11434}"
@@ -97,11 +94,12 @@ tool_use = false
 vision = false
 streaming = true
 
+# Example / site-specific provider. Will be removed from the bundled config in 0.10; define it in your own config layer.
 [providers.appliance]
 module = "LlmCore.LLM.Appliance"
 type = "local"
 enabled = true
-default_model = "local-model-id"
+default_model = "qwen3.5-27b-claude-4.6-opus-distilled-mlx"
 aliases = ["appliance", "local", "lmstudio"]
 cost_tier = "free"
 
@@ -113,7 +111,7 @@ streaming = true
 module = "LlmCore.LLM.OpenAI"
 type = "cloud"
 enabled = true
-default_model = "zai-model-id"
+default_model = "glm-5.1"
 aliases = ["zai", "z"]
 cost_tier = "plan"
 
@@ -438,7 +436,7 @@ cost_tier = "cli"
 # cascade = ["my_local", "my_cloud"]
 #
 # [native.default_models]
-# my_cloud = "some-model-id"
+# my_cloud = "gpt-4o-mini"
 #
 # # When a model name contains the substring, route to the named provider.
 # # Evaluated in order; first match wins; an unusable target falls through

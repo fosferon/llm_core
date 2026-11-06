@@ -390,7 +390,7 @@ defmodule LlmCore.Config.Loader do
   end
 
   @valid_prompt_positions ~w(last flagged)
-  @valid_prompt_transports ~w(last flagged)
+  @valid_prompt_transports ~w(last flagged stdin)
   @valid_system_prompt_transports ~w(flag file_flag inline_fallback unsupported)
   @valid_output_modes ~w(stdout_text final_message_only json)
   @valid_output_event_formats ~w(jsonl)
@@ -423,7 +423,7 @@ defmodule LlmCore.Config.Loader do
             prefix_args: List.wrap(Map.get(attrs, "prefix_args", [])),
             stdin_hack: Map.get(attrs, "stdin_hack", false) == true,
             install_hint: blank_to_nil(Map.get(attrs, "install_hint")),
-            prompt_transport: safe_to_atom_or_nil(Map.get(attrs, "prompt_transport")),
+            prompt_transport: normalize_prompt_transport(id, Map.get(attrs, "prompt_transport")),
             system_prompt_transport:
               safe_to_atom_or_nil(Map.get(attrs, "system_prompt_transport")),
             cwd_flag: blank_to_nil(Map.get(attrs, "cwd_flag")),
@@ -495,6 +495,32 @@ defmodule LlmCore.Config.Loader do
     end
   end
 
+  # `stdin` was never wired to the process input. It stays accepted for one
+  # more 0.9.x release as an alias for `:last` and warns once per VM.
+  defp normalize_prompt_transport(_id, nil), do: nil
+
+  defp normalize_prompt_transport(id, "stdin") do
+    warn_stdin_prompt_transport(id)
+    :last
+  end
+
+  defp normalize_prompt_transport(_id, value), do: safe_to_atom_or_nil(value)
+
+  defp warn_stdin_prompt_transport(id) do
+    key = {__MODULE__, :stdin_prompt_transport_warned}
+
+    unless :persistent_term.get(key, false) do
+      :persistent_term.put(key, true)
+
+      Logger.warning(
+        "prompt_transport = \"stdin\" for CLI provider #{id} is deprecated; " <>
+          "it is mapped to \"last\" and will be removed in 0.10"
+      )
+    end
+
+    :ok
+  end
+
   defp resolve_cli_model_resolution(attrs, %CLIProvider.Config{} = cli_config) do
     case blank_to_nil(Map.get(attrs, "model_resolution")) do
       nil -> cli_config.model_resolution
@@ -505,13 +531,16 @@ defmodule LlmCore.Config.Loader do
   defp resolve_model_resolution(attrs) do
     case blank_to_nil(Map.get(attrs, "model_resolution")) do
       nil ->
+        # 0.9.x keeps the historical implicit value. `caller_default` is the
+        # preferred spelling when configured explicitly; the implicit value
+        # flips to `:caller_default` in 0.10.
         if blank_to_nil(Map.get(attrs, "default_model")),
-          do: :caller_default,
+          do: :gc_default,
           else: :provider_runtime
 
       "provider_runtime" ->
         if blank_to_nil(Map.get(attrs, "default_model")),
-          do: :caller_default,
+          do: :gc_default,
           else: :provider_runtime
 
       value ->

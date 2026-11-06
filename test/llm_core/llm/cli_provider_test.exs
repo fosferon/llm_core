@@ -317,6 +317,24 @@ defmodule LlmCore.LLM.CLIProviderTest do
     end
   end
 
+  describe "legacy prompt transports" do
+    test "stdin maps to last instead of dropping the prompt" do
+      config = %CLIProvider.Config{
+        name: :legacy_stdin,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        prompt_position: :last,
+        prompt_transport: :stdin
+      }
+
+      provider = CLIProvider.from_config(config)
+
+      assert CLIProvider.build_args(provider, "hello", []) == ["hello"]
+      assert CLIProvider.invocation_plan(provider, "hello", []).prompt_transport == :last
+    end
+  end
+
   describe "invocation_plan/3" do
     test "summarizes codex invocation and inline persona strategy" do
       provider = CLIProvider.from_config(:codex_cli)
@@ -392,6 +410,25 @@ defmodule LlmCore.LLM.CLIProviderTest do
 
       provider = CLIProvider.from_config(config)
       assert CLIProvider.build_response(provider, "output", []).model == "model-v1"
+    end
+
+    test "gc_default with no default_model resolves to no model anywhere" do
+      config = %CLIProvider.Config{
+        name: :no_bundled_model,
+        binary: "echo",
+        provider_type: :cli,
+        default_timeout: 5_000,
+        default_model: nil,
+        model_resolution: :gc_default
+      }
+
+      provider = %CLIProvider{config: config}
+
+      assert CLIProvider.build_response(provider, "output", []).model == nil
+      assert CLIProvider.build_args(provider, "hello", []) == ["hello"]
+      assert CLIProvider.invocation_plan(provider, "hello", []).args == ["hello"]
+      refute "--model" in CLIProvider.build_args(provider, "hello", [])
+      assert is_map(CLIProvider.capabilities(provider))
     end
 
     test "treats gc_default as a deprecated alias for caller_default" do
