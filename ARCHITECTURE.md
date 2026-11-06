@@ -107,17 +107,19 @@ Built-in adapters:
 CLI tools are declared entirely in TOML (`type = "cli"`). The adapter builds
 the command line from fields such as `binary`, `subcommand`, flags,
 `prompt_transport`, `system_prompt_transport`, output mode and preflight
-checks. Supported prompt transports are `"last"` and `"flagged"`; `"stdin"`
-is rejected by the loader because the process input pipe is not written to.
+checks. Prompt transports are `"last"` and `"flagged"`. The legacy `"stdin"`
+value is accepted through 0.9.x as a deprecated alias for `"last"` and logs a
+one-time warning; it is removed in 0.10.
 
 Model selection follows `model_resolution`:
 
-- `"caller_default"` (documented neutral value) — use `default_model` only
-  when the caller passes no model.
+- `"gc_default"` — the implicit value in 0.9.x when `default_model` is set.
+  It uses `default_model` only when the caller passes no model.
+- `"caller_default"` — the preferred spelling of `"gc_default"`. It behaves
+  identically and, when configured explicitly, reads back as
+  `"caller_default"`. The implicit value flips to `"caller_default"` in 0.10.
 - `"provider_runtime"` — let the CLI choose its own default.
 - `"explicit_only"` — only the caller's model.
-- `"gc_default"` — deprecated alias for `"caller_default"`, accepted through
-  0.9.x and removed in 0.10.
 
 ### 3. ALF pipelines
 
@@ -174,12 +176,13 @@ resolve_strategy → switch
               execute_one_call(count: 3) → collect_results → compose_output
 ```
 
-The pipeline is started in async mode and shared by all callers. Every
-dispatch carries a deadline derived from the caller's `:tool_timeout`
-(default 300 s). Sub-calls run in monitored processes, return
-`{:error, {:timeout, ms}}` when the budget is exceeded, and parallel results
-are reordered to the recipe's declared order before composition. ALF is
-called with an explicit per-call timeout; its 10 s default is not used.
+The pipeline is started in async mode and shared by all callers. A dispatch
+carries a deadline only when the caller supplies `:tool_timeout`. With no
+caller budget the default is `:infinity`: there is no deadline and ALF is
+called with `timeout: :infinity`, so its 10 s default is not used. Finite
+budgets are enforced around every sub-call; timeouts report the configured
+budget and parallel results are reordered to the recipe's declared order
+before composition.
 
 ### 4. Agent loop
 
@@ -192,7 +195,8 @@ called with an explicit per-call timeout; its 10 s default is not used.
   (default 3, per run).
 - Repeated tool errors: circuit breaker after 3 identical fingerprints.
 - Optional terminal tool and terminal-content extraction.
-- Tool dispatch timeout: `:tool_timeout` (default 300_000 ms).
+- Tool dispatch timeout: `:tool_timeout` (default `:infinity` — no deadline;
+  a positive millisecond value enables a deadline).
 
 ### 5. Structured output
 
@@ -401,7 +405,8 @@ fails to start, the supervisor is stopped and `{:error, reason}` is returned.
 
 1. **ALF as a composition DSL** — stage lists are declarative and testable.
    The request pipelines use synchronous ALF calls; `ToolDispatch` uses the
-   async pipeline with an explicit per-call timeout.
+   async pipeline with the caller's explicit per-call timeout, or with
+   `timeout: :infinity` when the caller set no budget.
 
 2. **Behaviour plus struct dispatch** — module providers use a behaviour for
    compile-time contracts; config-driven CLI providers are structs routed by
@@ -417,6 +422,7 @@ fails to start, the supervisor is stopped and `{:error, reason}` is returned.
 5. **Resilience without hiding failures** — cache, circuit breaker and retry
    sit around memory I/O; persistent failures surface as typed errors.
 
-6. **Bounded tool dispatch** — recipe sub-calls run concurrently, are bounded
-   by the caller's timeout, and return typed timeout errors instead of
-   hanging the loop or restarting a shared pipeline.
+6. **Caller-owned tool dispatch budget** — recipe sub-calls run concurrently
+   and have no deadline unless the caller supplies one. Finite budgets return
+   typed timeout errors instead of hanging the loop or restarting a shared
+   pipeline.

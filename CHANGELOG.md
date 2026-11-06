@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## 0.9.3 — 2026-11-05
 
+### Added
+
+- `LlmCore.Agent.Loop.run/3` accepts `:tool_timeout`. It is the caller's
+  per-dispatch budget for recipe-backed tool calls. The default is `:infinity`
+  (no deadline): when you pass no value, neither the agent loop nor ALF
+  imposes one. A finite value is enforced around every sub-call and a timeout
+  reports the configured budget, e.g. `Tool call timed out after 100ms`.
+- CLI reads can be interrupted through `execution_id:`. The active port is
+  registered while a call runs and cleared when it completes, so a HALT can
+  look it up and stop the process. The identifier is any term, not only a
+  string.
+
 ### Fixed
 
 - Parallel tool dispatch is back. Tools whose resolver returns a dispatch
@@ -12,51 +24,62 @@ All notable changes to this project will be documented in this file.
   The old workaround that stopped the shared pipeline, slept 10 ms and
   restarted it in sync mode is gone; it could kill another caller's in-flight
   call.
-- Long tool calls are no longer cut off by ALF's 10 s default wait. The
-  agent loop accepts `:tool_timeout` (default 300 s) and passes it as an
-  explicit per-call ALF timeout. The budget is enforced around each sub-call;
-  exceeding it returns the bounded result
-  `Tool call timed out after Nms` backed by the typed reason
-  `{:timeout, ms}`.
 - Fan-out results are returned in the recipe's declared order even though
   workers finish out of order.
+- Timeout results are stable and always carry the configured budget, including
+  for a queued fan-out event whose remaining budget has already run out. They
+  no longer report a one-millisecond-short value or `after 0ms`.
+- If the dispatch pipeline cannot be started at all, the tool call now falls
+  back to direct execution through the resolver and logs a warning, as 0.9.2
+  did. A genuine timeout is never re-run through the fallback; it returns the
+  typed timeout result.
 - `LlmCore.Memory.Hindsight.WriteBuffer` now traps exits, so a graceful
-  supervisor shutdown calls `terminate/2` and persists buffered retains.
-- `LlmCore.Agent.Registry` no longer falls back to the deleted
-  `LlmCore.LLM.Zai` module.
-- `LlmCore.LLM.CLIProvider` registers its active port when the caller passes
-  `execution_id:`, so `LlmCore.Executor.Control.lookup/1` can interrupt an
-  in-flight CLI call.
+  supervisor shutdown calls `terminate/2` and persists buffered retains to
+  `hindsight_buffer.jsonl`. It also logs and ignores unexpected exit and
+  mailbox messages instead of crashing.
+- CLI streams register their control entry only when enumeration starts, so an
+  un-enumerated stream leaves nothing behind and set/clear stay symmetric.
+- `LlmCore.Agent.Registry` no longer falls back to a deleted provider module.
 
 ### Changed
 
-- `:caller_default` is the documented neutral value for
-  `LlmCore.LLM.CLIProvider.Config.model_resolution`. It uses `default_model`
-  only when the caller passes no model. The old `:gc_default` value still
-  behaves identically and is accepted throughout 0.9.x; see Deprecated.
-- `prompt_transport = "stdin"` is now rejected by the config loader instead
-  of silently omitting the prompt. Use `"last"` or `"flagged"`.
-- Bundled provider `default_model` values are neutral placeholders
-  (`anthropic-model-id`, `openai-model-id`, and so on). Set a real model id
-  in your project or home layer, or pass `:model` per call. The bundled
-  `droid` entry no longer ships a model and uses `caller_default`, so it
-  passes a model only when the caller supplies one.
-- Documentation now matches the code: the exact telemetry event list
-  (no events were renamed in this release), required-key-only validation for
-  map/list schemas, project-layer-only hot reload, the actual HALT wiring,
-  the unsupported `"stdin"` transport, and the current module layout in both
-  architecture guides.
-- Internal project and tracker references were removed from shipped source,
-  tests and documentation.
+- `model_resolution` keeps `:gc_default` as the implicit value in 0.9.x, and
+  bundled providers that rely on the implicit value keep it. `:caller_default`
+  is the preferred spelling and is accepted as input; it behaves identically,
+  and configuring it explicitly reads back as `:caller_default`. The implicit
+  value flips to `:caller_default` in 0.10.
+- Bundled provider model defaults are real 0.9.2 model ids again, not
+  placeholders, so a bundled provider never sends a fake id to a vendor. The
+  bundled `droid` entry no longer ships a model: pass one per call or let the
+  CLI decide. A provider configured with `model_resolution: :gc_default` and no
+  `default_model` resolves to no model, and no `--model` argument is built.
+- Site-specific bundled providers (for example the `appliance` entry) are
+  deprecated. They are unchanged in 0.9.3, but will be removed from the bundled
+  config in 0.10; define them in your own config layer.
+- `prompt_transport = "stdin"` is deprecated. It is accepted for one more
+  release, mapped to `"last"`, and logs a one-time warning. The provider is not
+  dropped. Use `"last"` or `"flagged"`; `"stdin"` is removed in 0.10.
+- Documentation now matches the code: the exact telemetry event list (no
+  events were renamed in this release), required-key-only validation for
+  map/list schemas, project-layer-only hot reload, the actual HALT wiring, the
+  deprecated `"stdin"` transport, the no-deadline default for `:tool_timeout`,
+  the preferred `:caller_default` spelling, and the current module layout in
+  both architecture guides. A dangling sentence in the telemetry section was
+  removed.
 
 ### Deprecated
 
-- `:gc_default` for `model_resolution` is a deprecated alias for
-  `:caller_default`. It behaves identically and will be removed in 0.10.
-- `DEVMAN_HOME` and `DEVMAN_CONFIG` are still read as fallbacks for
-  backward compatibility, but each emits one `Logger` warning per VM. Use
-  `LLM_CORE_HOME` and `LLM_CORE_PROJECT_CONFIG`; the old names will be
-  removed in 0.10.
+- `:caller_default` is the preferred spelling for CLIs that use
+  `default_model` when the caller passes no model. It is accepted now; the
+  implicit value is still `:gc_default` and flips to `:caller_default` in 0.10.
+- `prompt_transport = "stdin"` is accepted through 0.9.x, mapped to `"last"`,
+  and removed in 0.10.
+- Site-specific bundled providers are unchanged in 0.9.3 and will be removed
+  from the bundled config in 0.10; define them in your own config layer.
+- `DEVMAN_HOME` and `DEVMAN_CONFIG` are still read as fallbacks for backward
+  compatibility, but each emits one `Logger` warning per VM. Use
+  `LLM_CORE_HOME` and `LLM_CORE_PROJECT_CONFIG`; the old names will be removed
+  in 0.10.
 
 ## 0.9.2 — 2026-10-31
 

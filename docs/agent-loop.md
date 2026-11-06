@@ -68,7 +68,7 @@ final_response.content
 | `:tools` | **Yes** | — | List of `LlmToolkit.Tool.t()` definitions |
 | `:resolve_tool` | **Yes** | — | `fn(Call.t()) -> {:ok, String.t()} \| {:error, String.t()}` |
 | `:resolver_module` | No | `nil` | Module implementing `ToolResolver` behaviour for dispatch recipes |
-| `:tool_timeout` | No | `300_000` | Maximum time in ms for one tool dispatch, including all recipe sub-calls. Explicit values win; a timeout returns a bounded `Tool call timed out after Nms` result. |
+| `:tool_timeout` | No | `:infinity` | Maximum time in ms for one tool dispatch, including all recipe sub-calls. With no value there is no deadline. A finite timeout returns a bounded `Tool call timed out after Nms` result carrying the configured budget. |
 | `:terminal_tool` | No | `nil` | Tool name that stops the loop when called. The call is **not** dispatched — its raw arguments land on `response.metadata.terminal_args` and the full call on `response.metadata.terminal_tool_call`. Sibling tool calls in the same response **are** dispatched first and their transcript is appended to the final messages. Useful for letting the model select a structured result (e.g. citations) as its final turn. |
 | `:terminal_required` | No | `false` | With `:terminal_tool`: a no-tool-call response with prose does **not** end the loop. The prose is appended as an assistant message, `:terminal_nudge` follows as a user message, and the turn is retried. Narrated stops are budgeted per run by `:max_nonterminal_stops`. Exhausting that budget, or the iteration budget before the terminal tool is called, returns `{:error, {:terminal_missing, details}}` with the last prose, so the caller chooses how to degrade. A completion that needed retries carries `response.metadata.terminal_recovery_attempts`. |
 | `:terminal_nudge` | No | names the tool | User-message text for the non-terminal retry. |
@@ -144,11 +144,13 @@ The completion event carries `%{total_iterations: N}` with metadata
 ## Tool dispatch timeout
 
 Recipe-backed tool calls run on the shared async `ToolDispatch` pipeline.
-`DispatchTools` passes a per-call ALF timeout derived from the caller's
-`:tool_timeout` (default 300 s) instead of relying on ALF's 10 s default, so
-long tool calls are not killed by the pipeline wait. The timeout is enforced
-around each sub-call and returns the typed reason `{:timeout, ms}`; the loop
-surfaces it as `Tool call timed out after Nms`.
+`DispatchTools` passes the caller's `:tool_timeout` as the per-call ALF
+timeout. The default is `:infinity`, which means no deadline and prevents
+ALF's 10 s default from cutting long calls. A finite timeout is enforced
+around each sub-call and returns the typed reason `{:timeout, configured_ms}`;
+the loop surfaces it as `Tool call timed out after Nms`. A genuine timeout is
+never retried through the direct-execution fallback; that fallback is only for
+a pipeline that cannot be started.
 
 ## Integration Example
 

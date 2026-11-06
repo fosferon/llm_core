@@ -116,7 +116,7 @@ default_timeout = 60000               # ms, default 1_800_000
 default_model = "v1"                  # fallback if not set at provider level
 prompt_position = "last"              # "last" or "flagged"
 prompt_flag = "-p"                    # required when prompt_position = "flagged"
-prompt_transport = "flagged"          # "last" or "flagged"
+prompt_transport = "flagged"          # "last" or "flagged" ("stdin" is a deprecated alias for "last")
 system_prompt_transport = "file_flag" # "flag", "file_flag", "inline_fallback", "unsupported"
 cwd_flag = "--cwd"                    # optional
 add_dir_flag = "--add-dir"            # optional

@@ -140,10 +140,11 @@ resolve_strategy → switch
 
 This is the only pipeline that runs asynchronously. It is a shared singleton:
 callers start it in async mode and never stop or restart it. `DispatchTools`
-passes a per-call ALF timeout derived from the caller's `:tool_timeout`
-(default 300 s), so ALF's 10 s default does not cut long calls. Sub-calls run
-in monitored processes, time out with `{:error, {:timeout, ms}}`, and parallel
-results are reordered to the recipe's declared order.
+passes the caller's `:tool_timeout` as the per-call ALF timeout. The default is
+`:infinity`: no deadline, so ALF's 10 s default does not cut long calls. A
+finite budget is enforced around every sub-call; timeouts report the
+configured budget as `{:error, {:timeout, ms}}`, and parallel results are
+reordered to the recipe's declared order.
 
 ---
 
@@ -190,18 +191,19 @@ without implementing the module callbacks.
 
 CLI providers are data, not modules. TOML controls the binary, subcommand,
 flags, prompt transport, system-prompt transport, output capture, preflight
-and automation profiles. `prompt_transport` supports `"last"` and
-`"flagged"`; `"stdin"` is rejected by the loader because the CLI stdin pipe is
-not written to.
+and automation profiles. Prompt transports are `"last"` and `"flagged"`. The
+legacy `"stdin"` value is accepted through 0.9.x as a deprecated alias for
+`"last"` and logs a one-time warning; it is removed in 0.10.
 
 Model selection is controlled by `model_resolution`:
 
-- `"caller_default"` — documented neutral value; use `default_model` only
-  when the caller passes no model.
+- `"gc_default"` — implicit value in 0.9.x when `default_model` is set; use
+  `default_model` only when the caller passes no model.
+- `"caller_default"` — preferred spelling of `"gc_default"`. It behaves
+  identically and, when configured explicitly, reads back as
+  `"caller_default"`. The implicit value flips to `"caller_default"` in 0.10.
 - `"provider_runtime"` — let the CLI choose.
 - `"explicit_only"` — only the caller's model.
-- `"gc_default"` — deprecated alias for `"caller_default"`, accepted in
-  0.9.x and removed in 0.10.
 
 ---
 
@@ -334,8 +336,8 @@ caller to supply an id.
 [:llm_core, :hindsight, :health]
 ```
 
-Span sampling and the built-in logger are controlled by
-The telemetry settings control sampling and the logger; the routing error event is not sampled.
+The telemetry settings control sampling and the built-in logger; the routing
+error event is not sampled.
 
 ---
 
