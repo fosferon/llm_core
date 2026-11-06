@@ -188,7 +188,7 @@ subcommand = "exec"
 default_timeout = 1800000
 # Set default_model here if your droid profile has a fixed model; when unset
 # the caller's :model is passed through, or no model flag is sent.
-model_resolution = "caller_default"
+model_resolution = "gc_default"
 prompt_position = "last"
 prompt_transport = "last"
 system_prompt_transport = "file_flag"

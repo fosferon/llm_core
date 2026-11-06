@@ -446,10 +446,13 @@ defmodule LlmCore.Config.LoaderTest do
 
       assert {:ok, entry} = LlmCore.CLIProvider.Registry.fetch(:droid)
       assert entry.default_model == nil
-      assert entry.model_resolution == :caller_default
+      # 0.9.x contract: the bundled droid entry reads back as :gc_default,
+      # exactly as in 0.9.2, so consumers matching on it keep working.
+      assert entry.model_resolution == :gc_default
 
       assert {:ok, config} = LlmCore.LLM.CLIProvider.config(:droid)
       assert config.default_model == nil
+      assert config.model_resolution == :gc_default
 
       provider = LlmCore.LLM.CLIProvider.from_config(config)
       args = LlmCore.LLM.CLIProvider.build_args(provider, "hello", [])
