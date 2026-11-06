@@ -50,6 +50,17 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
       end
     end
 
+    def dispatch_recipe("fanout_timeout_dispatch") do
+      fn _args ->
+        %{
+          parallel: [
+            %{tool: "sleepy", arguments: %{"ms" => 10}, label: "quick"},
+            %{tool: "sleepy", arguments: %{"ms" => 2_000}, label: "slow"}
+          ]
+        }
+      end
+    end
+
     def dispatch_recipe(_), do: nil
   end
 
@@ -227,16 +238,7 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
   end
 
   test "falls back to direct execution when the pipeline cannot be started" do
-    stop_pipeline()
-
-    # Take ALF's dynamic supervisor away so starting the shared pipeline fails.
-    :ok = Supervisor.terminate_child(ALF.Supervisor, ALF.DynamicSupervisor)
-
-    on_exit(fn ->
-      if Process.whereis(ALF.DynamicSupervisor) == nil do
-        Supervisor.restart_child(ALF.Supervisor, ALF.DynamicSupervisor)
-      end
-    end)
+    disable_pipeline_start()
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
@@ -247,6 +249,62 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
       end)
 
     assert log =~ "falling back to direct execution"
+  end
+
+  test "direct fallback honours a finite tool_timeout" do
+    disable_pipeline_start()
+
+    resolve_fn = fn _call ->
+      Process.sleep(2_000)
+      {:ok, "too late"}
+    end
+
+    ctx = context("slow_dispatch", resolve_fn, tool_timeout: 100)
+
+    {elapsed_us, {result, _log}} =
+      :timer.tc(fn ->
+        ExUnit.CaptureLog.with_log(fn -> DispatchTools.call(ctx, []) end)
+      end)
+
+    assert [%{content: content}] = result.tool_results
+    assert content == "Tool call timed out after 100ms"
+    assert elapsed_us < 1_000_000
+  end
+
+  test "direct fallback without a budget succeeds" do
+    disable_pipeline_start()
+
+    resolve_fn = fn _call ->
+      Process.sleep(400)
+      {:ok, "direct no-deadline result"}
+    end
+
+    ctx = context("slow_dispatch", resolve_fn, tool_timeout: :infinity)
+
+    {elapsed_us, {result, _log}} =
+      :timer.tc(fn ->
+        ExUnit.CaptureLog.with_log(fn -> DispatchTools.call(ctx, []) end)
+      end)
+
+    assert [%{content: content}] = result.tool_results
+    assert content == "direct no-deadline result"
+    assert elapsed_us >= 400_000
+  end
+
+  test "a timeout in one fan-out call reports the whole step as timed out" do
+    resolve_fn = fn %Call{name: "sleepy", arguments: %{"ms" => ms}} ->
+      Process.sleep(ms)
+      {:ok, "slept #{ms}ms"}
+    end
+
+    ctx = context("fanout_timeout_dispatch", resolve_fn, tool_timeout: 100)
+
+    {elapsed_us, result} = :timer.tc(fn -> DispatchTools.call(ctx, []) end)
+
+    assert [%{content: content}] = result.tool_results
+    assert content == "Tool call timed out after 100ms"
+    refute content =~ "slept"
+    assert elapsed_us < 1_000_000
   end
 
   test "parallel fan-out returns results in the recipe's original order" do
@@ -264,6 +322,19 @@ defmodule LlmCore.Agent.ToolDispatch.AsyncTest do
     third = :binary.match(content, "### third") |> elem(0)
 
     assert first < second and second < third
+  end
+
+  defp disable_pipeline_start do
+    stop_pipeline()
+
+    # Take ALF's dynamic supervisor away so starting the shared pipeline fails.
+    :ok = Supervisor.terminate_child(ALF.Supervisor, ALF.DynamicSupervisor)
+
+    on_exit(fn ->
+      if Process.whereis(ALF.DynamicSupervisor) == nil do
+        Supervisor.restart_child(ALF.Supervisor, ALF.DynamicSupervisor)
+      end
+    end)
   end
 
   defp context(tool_name, resolve_fn, opts) do

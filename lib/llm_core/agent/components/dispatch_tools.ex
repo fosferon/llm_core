@@ -20,11 +20,20 @@ defmodule LlmCore.Agent.Components.DispatchTools do
   Recipe-backed calls run through the async `ToolDispatch` pipeline with a
   per-dispatch timeout taken from the caller (`:tool_timeout`). The pipeline
   is shared by all callers and is never restarted from this stage.
+
+  ## Fan-out timeout semantics
+
+  A recipe's parallel sub-calls share the caller's `:tool_timeout` budget.
+  If that budget expires for one call in a fan-out, the whole tool step
+  reports the typed timeout (`Tool call timed out after Nms`); successful
+  sibling results are not returned. Timeout handling is all-or-nothing,
+  never a partial result.
   """
 
   alias LlmCore.Agent.Context
   alias LlmCore.Agent.Pipeline.ToolDispatch, as: ToolDispatchPipeline
   alias LlmCore.Agent.ToolDispatch.Event, as: DispatchEvent
+  alias LlmCore.Agent.ToolDispatch.Execution
   alias LlmToolkit.Tool.Call
   alias LlmToolkit.Tool.Result
 
@@ -137,7 +146,7 @@ defmodule LlmCore.Agent.Components.DispatchTools do
             "falling back to direct execution for #{call.name}"
         )
 
-        execute_one(call, resolve_fn)
+        execute_direct(call, resolve_fn, timeout)
     end
   end
 
@@ -191,9 +200,10 @@ defmodule LlmCore.Agent.Components.DispatchTools do
           content: "Dispatch pipeline error: #{inspect(error)}"
         }
 
-      # Defensive: ALF returns nil when its own wait expires before the
-      # pipeline emits a result. With an explicit :infinity wait this cannot
-      # happen, but it can if the grace window is somehow exhausted first.
+      # Defensive: nil means the pipeline produced no result, e.g. an ip was
+      # destroyed without emitting one, or ALF's wait was exhausted before the
+      # result arrived. Report a bounded timeout instead of silently re-running
+      # through the direct-execution fallback.
       nil ->
         %Result{
           tool_call_id: call.id,
@@ -233,6 +243,50 @@ defmodule LlmCore.Agent.Components.DispatchTools do
     do: timeout
 
   defp tool_timeout(%Context{}), do: @default_tool_timeout
+
+  # Direct execution is the fallback when the shared pipeline cannot start.
+  # Outside the pipeline no ALF stage enforces the caller's budget, so a
+  # finite :tool_timeout is applied explicitly through the same helper the
+  # pipeline uses. With :infinity the previous unbounded behaviour is kept.
+  @spec execute_direct(Call.t(), function(), pos_integer() | :infinity) :: Result.t()
+  defp execute_direct(%Call{} = call, resolve_fn, :infinity) do
+    execute_one(call, resolve_fn)
+  end
+
+  defp execute_direct(%Call{} = call, resolve_fn, timeout) when is_integer(timeout) do
+    event = %DispatchEvent{
+      call: call,
+      resolve_fn: resolve_fn,
+      timeout: timeout,
+      deadline: deadline(timeout)
+    }
+
+    case Execution.run(event, fn -> execute_one(call, resolve_fn) end) do
+      %Result{} = result ->
+        result
+
+      {:error, {:timeout, _timeout_ms}} ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: timeout_content(timeout)
+        }
+
+      {:error, {:execution_error, reason}} ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: "Tool execution error: #{inspect(reason)}"
+        }
+
+      other ->
+        %Result{
+          tool_call_id: call.id,
+          name: call.name,
+          content: "Tool execution error: #{inspect(other)}"
+        }
+    end
+  end
 
   @spec execute_one(Call.t(), (Call.t() -> {:ok, String.t()} | {:error, String.t()})) ::
           Result.t()
