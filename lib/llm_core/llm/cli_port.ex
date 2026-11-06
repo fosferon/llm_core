@@ -79,11 +79,12 @@ defmodule LlmCore.LLM.CLIPort do
             {:line, 1024}
           ])
 
-        _ = maybe_set_active(execution_id, port)
-
         stream =
           Stream.resource(
-            fn -> {port, timeout, execution_id} end,
+            fn ->
+              _ = maybe_set_active(execution_id, port)
+              {port, timeout, execution_id}
+            end,
             &stream_next/1,
             fn
               nil ->
@@ -166,14 +167,14 @@ defmodule LlmCore.LLM.CLIPort do
 
   defp maybe_set_active(nil, _port), do: :ok
 
-  defp maybe_set_active(execution_id, port) when is_binary(execution_id) and is_port(port) do
+  defp maybe_set_active(execution_id, port) when is_port(port) do
     _ = Control.set_active_port(execution_id, port)
     :ok
   end
 
   defp maybe_clear_active(nil), do: :ok
 
-  defp maybe_clear_active(execution_id) when is_binary(execution_id) do
+  defp maybe_clear_active(execution_id) do
     _ = Control.clear_active(execution_id)
     :ok
   end

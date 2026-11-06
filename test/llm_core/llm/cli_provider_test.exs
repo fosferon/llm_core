@@ -1,6 +1,7 @@
 defmodule LlmCore.LLM.CLIProviderTest do
   use ExUnit.Case, async: true
 
+  alias LlmCore.Executor.Control
   alias LlmCore.LLM.CLIProvider
   alias LlmCore.LLM.{Response, Error}
 
@@ -1226,6 +1227,88 @@ defmodule LlmCore.LLM.CLIProviderTest do
       assert {:ok, config} = CLIProvider.config(:claude_code)
       assert config.tool_call_transport == nil
     end
+  end
+
+  describe "HALT execution control" do
+    test "registers and interrupts a run_port call with a binary execution id" do
+      execution_id = "halt-binary-#{System.unique_integer([:positive])}"
+      assert_halt_interrupts(execution_id)
+    end
+
+    test "registers and interrupts a run_port call with a non-binary execution id" do
+      execution_id = {:halt, make_ref()}
+      assert_halt_interrupts(execution_id)
+    end
+
+    test "clears the entry after normal completion" do
+      execution_id = "halt-normal-#{System.unique_integer([:positive])}"
+      provider = halt_provider(["-c", "printf 'done'"])
+
+      assert {:ok, %Response{}} =
+               CLIProvider.send(provider, "hi", execution_id: execution_id, timeout: 5_000)
+
+      assert Control.lookup(execution_id) == :error
+    end
+
+    test "is a no-op without an execution id" do
+      provider = halt_provider(["-c", "printf 'done'"])
+
+      assert {:ok, %Response{}} = CLIProvider.send(provider, "hi", timeout: 5_000)
+      assert Control.lookup(nil) == :error
+    end
+
+    test "an un-enumerated stream leaves no Control entry" do
+      execution_id = "halt-stream-#{System.unique_integer([:positive])}"
+      provider = halt_provider(["-c", "printf 'hello\\n'"])
+
+      assert {:ok, stream} = CLIProvider.stream(provider, "hi", execution_id: execution_id)
+      assert Control.lookup(execution_id) == :error
+
+      assert Enum.to_list(stream) != []
+      assert Control.lookup(execution_id) == :error
+    end
+  end
+
+  defp assert_halt_interrupts(execution_id) do
+    provider = halt_provider(["-c", "sleep 30"])
+
+    task =
+      Task.async(fn ->
+        CLIProvider.send(provider, "hi", execution_id: execution_id, timeout: 30_000)
+      end)
+
+    port = wait_for_control_port(execution_id)
+    assert {:os_pid, os_pid} = Port.info(port, :os_pid)
+
+    {_, 0} = System.cmd("kill", ["-TERM", Integer.to_string(os_pid)])
+
+    result = Task.await(task, 5_000)
+    assert match?({:error, _}, result)
+    assert Control.lookup(execution_id) == :error
+  end
+
+  defp wait_for_control_port(execution_id, attempts \\ 200)
+  defp wait_for_control_port(_execution_id, 0), do: flunk("execution port was never registered")
+
+  defp wait_for_control_port(execution_id, attempts) do
+    case Control.lookup(execution_id) do
+      {:ok, port} ->
+        port
+
+      :error ->
+        Process.sleep(10)
+        wait_for_control_port(execution_id, attempts - 1)
+    end
+  end
+
+  defp halt_provider(prefix_args) do
+    CLIProvider.from_config(%CLIProvider.Config{
+      name: :halt_test,
+      binary: "/bin/sh",
+      provider_type: :cli,
+      default_timeout: 5_000,
+      prefix_args: prefix_args
+    })
   end
 
   # ── Helper to call private functions for testing ──────────

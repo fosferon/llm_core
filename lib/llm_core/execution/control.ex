@@ -11,9 +11,12 @@ defmodule LlmCore.Executor.Control do
 
   @doc """
   Registers a port as the active process for the given execution ID.
+
+  The execution ID is any term; callers commonly use a binary, but HALT must
+  work for whatever key the consumer uses.
   """
-  @spec set_active_port(String.t(), port()) :: :ok
-  def set_active_port(execution_id, port) when is_binary(execution_id) and is_port(port) do
+  @spec set_active_port(term(), port()) :: :ok
+  def set_active_port(execution_id, port) when is_port(port) do
     ensure_table()
     :ets.insert(@table, {execution_id, port})
     :ok
@@ -22,8 +25,8 @@ defmodule LlmCore.Executor.Control do
   @doc """
   Removes the active port registration for the given execution ID.
   """
-  @spec clear_active(String.t()) :: :ok
-  def clear_active(execution_id) when is_binary(execution_id) do
+  @spec clear_active(term()) :: :ok
+  def clear_active(execution_id) do
     ensure_table()
     :ets.delete(@table, execution_id)
     :ok
@@ -34,8 +37,8 @@ defmodule LlmCore.Executor.Control do
 
   Returns `{:ok, port}` if found, `:error` otherwise.
   """
-  @spec lookup(String.t()) :: {:ok, port()} | :error
-  def lookup(execution_id) when is_binary(execution_id) do
+  @spec lookup(term()) :: {:ok, port()} | :error
+  def lookup(execution_id) do
     ensure_table()
 
     case :ets.lookup(@table, execution_id) do

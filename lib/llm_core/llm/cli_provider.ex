@@ -1250,11 +1250,12 @@ defmodule LlmCore.LLM.CLIProvider do
             args: args
           ])
 
-        _ = maybe_set_active(execution_id, port)
-
         stream =
           Stream.resource(
-            fn -> {port, timeout, execution_id} end,
+            fn ->
+              _ = maybe_set_active(execution_id, port)
+              {port, timeout, execution_id}
+            end,
             &stream_next/1,
             fn
               nil ->
@@ -1303,13 +1304,13 @@ defmodule LlmCore.LLM.CLIProvider do
     end
   end
 
-  defp maybe_set_active(execution_id, port) when is_binary(execution_id) and is_port(port) do
+  defp maybe_set_active(execution_id, port) when not is_nil(execution_id) and is_port(port) do
     Control.set_active_port(execution_id, port)
   end
 
   defp maybe_set_active(_execution_id, _port), do: :ok
 
-  defp maybe_clear_active(execution_id) when is_binary(execution_id) do
+  defp maybe_clear_active(execution_id) when not is_nil(execution_id) do
     Control.clear_active(execution_id)
   end
 
