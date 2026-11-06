@@ -253,7 +253,8 @@ defmodule LlmCore.Agent.Components.DispatchTools do
     execute_one(call, resolve_fn)
   end
 
-  defp execute_direct(%Call{} = call, resolve_fn, timeout) when is_integer(timeout) do
+  defp execute_direct(%Call{} = call, resolve_fn, timeout)
+       when is_integer(timeout) and timeout > 0 do
     event = %DispatchEvent{
       call: call,
       resolve_fn: resolve_fn,
@@ -277,13 +278,6 @@ defmodule LlmCore.Agent.Components.DispatchTools do
           tool_call_id: call.id,
           name: call.name,
           content: "Tool execution error: #{inspect(reason)}"
-        }
-
-      other ->
-        %Result{
-          tool_call_id: call.id,
-          name: call.name,
-          content: "Tool execution error: #{inspect(other)}"
         }
     end
   end
