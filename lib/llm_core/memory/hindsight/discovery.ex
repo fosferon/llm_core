@@ -90,7 +90,7 @@ defmodule LlmCore.Memory.Hindsight.Discovery do
   def probe_health(url) do
     health_url = String.trim_trailing(url, "/") <> "/health"
 
-    case Req.get(health_url, receive_timeout: @health_timeout_ms) do
+    case Req.get(health_url, receive_timeout: @health_timeout_ms, compressed: true) do
       {:ok, %{status: 200, body: %{"status" => "healthy"} = body}} ->
         {:ok, body}
 

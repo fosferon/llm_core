@@ -26,9 +26,10 @@ defmodule LlmCore.LLM.Appliance do
   def probe_options(timeout) do
     [
       headers: @probe_headers,
-      pool_timeout: timeout,
+      finch: [pool_timeout: timeout],
       receive_timeout: timeout,
-      retry: false
+      retry: false,
+      compressed: true
     ]
   end
 
@@ -83,7 +84,8 @@ defmodule LlmCore.LLM.Appliance do
       case Req.post(url <> @chat_path,
              json: payload,
              headers: headers,
-             receive_timeout: timeout
+             receive_timeout: timeout,
+             compressed: true
            ) do
         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
           {:ok, build_response(body, opts)}

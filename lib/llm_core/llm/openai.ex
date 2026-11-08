@@ -137,7 +137,12 @@ defmodule LlmCore.LLM.OpenAI do
       {"Content-Type", "application/json"}
     ]
 
-    case Req.post(url, json: req_body, headers: headers, receive_timeout: timeout) do
+    case Req.post(url,
+           json: req_body,
+           headers: headers,
+           receive_timeout: timeout,
+           compressed: true
+         ) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         build_ok_response(body, model)
 

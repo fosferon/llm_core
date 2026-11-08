@@ -14,11 +14,18 @@ All notable changes to this project will be documented in this file.
 - Third-party dependencies updated to their latest versions within the existing
   requirements, notably `req` 0.5.17 → 0.7.5 (with `finch` 0.24, `mint` 1.11),
   `ecto` 3.14.3, `ex_doc` 0.40.4.
+- `req` is now required as `~> 0.7`, the line this release is tested against.
+- Req 0.6.1 made response decompression opt-in. Every non-streaming request
+  (provider sends, model and health probes, the Hindsight REST client) now sets
+  `compressed: true`, so a gzip-encoded JSON reply is decompressed and decoded
+  as it was under 0.9.3. Streaming requests do not ask for compression.
+- The appliance and native probes pass their pool timeout as
+  `finch: [pool_timeout: ...]`; the top-level form is deprecated in Req 0.7.
 
 ### Removed
 
-- The unused dev-only `earmark` dependency (retired upstream, with a MEDIUM
-  advisory, EEF-CVE-2026-48591). ExDoc uses its own Markdown parser.
+- The unused dev-only `earmark` dependency, which is retired upstream. ExDoc
+  uses `earmark_parser`, a separate package.
 
 ## 0.9.3 — 2026-11-06
 

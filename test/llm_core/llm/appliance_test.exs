@@ -297,7 +297,8 @@ defmodule LlmCore.LLM.ApplianceTest do
       opts = Appliance.probe_options(2_000)
 
       assert opts[:headers] == [{"connection", "close"}]
-      assert opts[:pool_timeout] == 2_000
+      assert opts[:finch] == [pool_timeout: 2_000]
+      assert opts[:compressed] == true
       assert opts[:receive_timeout] == 2_000
       assert opts[:retry] == false
     end

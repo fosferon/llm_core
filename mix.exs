@@ -117,7 +117,7 @@ defmodule LlmCore.MixProject do
     [
       # Tool contract + base tools (ToolResolver, Tool, Call, Result)
       {:llm_toolkit, "~> 0.1.0"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.7"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.9"},
       {:toml, "~> 0.7"},

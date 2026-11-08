@@ -314,7 +314,7 @@ defmodule LlmCore.Memory.Backend.HindsightREST do
     url = String.trim_trailing(base_url, "/") <> path
     api_key = Keyword.get(opts, :api_key)
 
-    case Req.get(url, headers: build_headers(api_key), receive_timeout: timeout) do
+    case Req.get(url, headers: build_headers(api_key), receive_timeout: timeout, compressed: true) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
@@ -332,7 +332,7 @@ defmodule LlmCore.Memory.Backend.HindsightREST do
 
     headers = build_headers(api_key, resolved: Keyword.get(opts, :api_key_resolved, false))
 
-    case Req.post(url, json: body, headers: headers, receive_timeout: timeout) do
+    case Req.post(url, json: body, headers: headers, receive_timeout: timeout, compressed: true) do
       {:ok, %{status: 200, body: response}} -> {:ok, response}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
@@ -347,7 +347,12 @@ defmodule LlmCore.Memory.Backend.HindsightREST do
     url = String.trim_trailing(base_url, "/") <> path
     api_key = Keyword.get(opts, :api_key)
 
-    case Req.put(url, json: body, headers: build_headers(api_key), receive_timeout: timeout) do
+    case Req.put(url,
+           json: body,
+           headers: build_headers(api_key),
+           receive_timeout: timeout,
+           compressed: true
+         ) do
       {:ok, %{status: s, body: response}} when s in 200..201 -> {:ok, response}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}
@@ -361,7 +366,11 @@ defmodule LlmCore.Memory.Backend.HindsightREST do
     url = String.trim_trailing(base_url, "/") <> path
     api_key = Keyword.get(opts, :api_key)
 
-    case Req.delete(url, headers: build_headers(api_key), receive_timeout: timeout) do
+    case Req.delete(url,
+           headers: build_headers(api_key),
+           receive_timeout: timeout,
+           compressed: true
+         ) do
       {:ok, %{status: s, body: response}} when s in 200..204 -> {:ok, response}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, %Req.TransportError{reason: reason}} -> {:error, {:transport_error, reason}}

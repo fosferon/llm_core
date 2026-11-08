@@ -24,7 +24,11 @@ defmodule LlmCore.LLM.Ollama do
   def available? do
     base_url = base_url([])
 
-    case Req.get(endpoint(base_url, "/api/tags"), receive_timeout: 1_000, retry: false) do
+    case Req.get(endpoint(base_url, "/api/tags"),
+           receive_timeout: 1_000,
+           retry: false,
+           compressed: true
+         ) do
       {:ok, %Req.Response{status: status}} when status in 200..399 -> true
       _ -> false
     end
@@ -127,7 +131,8 @@ defmodule LlmCore.LLM.Ollama do
 
     case Req.post(endpoint(base_url, "/api/chat"),
            json: payload,
-           receive_timeout: timeout
+           receive_timeout: timeout,
+           compressed: true
          ) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         {:ok, body}

@@ -92,7 +92,12 @@ defmodule LlmCore.LLM.Anthropic do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     url = messages_url(opts)
 
-    case Req.post(url, json: payload, headers: headers, receive_timeout: timeout) do
+    case Req.post(url,
+           json: payload,
+           headers: headers,
+           receive_timeout: timeout,
+           compressed: true
+         ) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         {:ok, build_response(body)}
 

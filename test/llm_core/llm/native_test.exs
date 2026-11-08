@@ -315,7 +315,7 @@ defmodule LlmCore.LLM.NativeTest do
       opts = Native.probe_options()
 
       assert opts[:headers] == [{"connection", "close"}]
-      assert opts[:pool_timeout] == 3_000
+      assert opts[:finch] == [pool_timeout: 3_000]
       assert opts[:receive_timeout] == 3_000
       assert opts[:retry] == false
     end
