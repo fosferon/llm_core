@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- Requirements on our own pre-1.0 libraries accept one minor line:
+  `llm_toolkit ~> 0.1.0` and `comm_bus ~> 0.2.0` (were `~> 0.1` and `~> 0.2`).
+  Below 1.0 a minor release may break, so a new minor of either is taken by a
+  deliberate bump here rather than resolved silently.
+
 ## 0.9.3 — 2026-11-06
 
 ### Added

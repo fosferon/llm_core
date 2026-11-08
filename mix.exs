@@ -116,7 +116,7 @@ defmodule LlmCore.MixProject do
   defp deps do
     [
       # Tool contract + base tools (ToolResolver, Tool, Call, Result)
-      {:llm_toolkit, "~> 0.1"},
+      {:llm_toolkit, "~> 0.1.0"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.9"},
@@ -129,7 +129,7 @@ defmodule LlmCore.MixProject do
       {:earmark, "~> 1.4", only: :dev, runtime: false},
       {:mox, "~> 1.0", only: :test},
       {:stream_data, "~> 1.0", only: :test},
-      {:comm_bus, "~> 0.2"}
+      {:comm_bus, "~> 0.2.0"}
     ]
   end
 end
