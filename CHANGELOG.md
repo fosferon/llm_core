@@ -10,6 +10,15 @@ All notable changes to this project will be documented in this file.
   `llm_toolkit ~> 0.1.0` and `comm_bus ~> 0.2.0` (were `~> 0.1` and `~> 0.2`).
   Below 1.0 a minor release may break, so a new minor of either is taken by a
   deliberate bump here rather than resolved silently.
+- `llm_toolkit` locked at 0.1.1.
+- Third-party dependencies updated to their latest versions within the existing
+  requirements, notably `req` 0.5.17 → 0.7.5 (with `finch` 0.24, `mint` 1.11),
+  `ecto` 3.14.3, `ex_doc` 0.40.4.
+
+### Removed
+
+- The unused dev-only `earmark` dependency (retired upstream, with a MEDIUM
+  advisory, EEF-CVE-2026-48591). ExDoc uses its own Markdown parser.
 
 ## 0.9.3 — 2026-11-06
 
