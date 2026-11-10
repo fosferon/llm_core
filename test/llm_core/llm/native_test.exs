@@ -355,4 +355,16 @@ defmodule LlmCore.LLM.NativeTest do
       end
     end
   end
+
+  describe "build_send_result/3 max_iterations override" do
+    test "the error message reports the caller's effective cap, not the module default" do
+      assert {:error, %LlmCore.LLM.Error{message: "Iteration limit reached (80)"}} =
+               Native.build_send_result({:error, :max_iterations_reached}, 5, 80)
+    end
+
+    test "nil keeps the module default in the message" do
+      assert {:error, %LlmCore.LLM.Error{message: "Iteration limit reached (15)"}} =
+               Native.build_send_result({:error, :max_iterations_reached}, 5, nil)
+    end
+  end
 end

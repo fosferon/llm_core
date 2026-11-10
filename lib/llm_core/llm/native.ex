@@ -82,12 +82,19 @@ defmodule LlmCore.LLM.Native do
     model = opts[:model]
     timeout = opts[:timeout]
     llm_provider = opts[:llm_provider]
+    tools = opts[:tools]
+    resolve_tool = opts[:resolve_tool]
+    max_iterations = opts[:max_iterations]
 
     start = System.monotonic_time(:millisecond)
 
     result =
       try do
-        do_send(prompt, cwd, agent_file, model, timeout, llm_provider, opts[:resolve_tool])
+        do_send(prompt, cwd, agent_file, model, timeout, llm_provider, %{
+          tools: tools,
+          resolve_tool: resolve_tool,
+          max_iterations: max_iterations
+        })
       rescue
         e ->
           {:error, "Native dispatch crashed: #{Exception.message(e)}"}
@@ -95,7 +102,7 @@ defmodule LlmCore.LLM.Native do
 
     elapsed = System.monotonic_time(:millisecond) - start
 
-    build_send_result(result, elapsed)
+    build_send_result(result, elapsed, max_iterations)
   end
 
   # Maps a Loop.run result to the provider-boundary Response/Error.
@@ -107,9 +114,11 @@ defmodule LlmCore.LLM.Native do
   # context through as Error details instead of collapsing to a generic
   # inspect string.
   @doc false
-  @spec build_send_result(term(), integer()) ::
+  @spec build_send_result(term(), integer(), pos_integer() | nil) ::
           {:ok, Response.t()} | {:error, Error.t()}
-  def build_send_result({:ok, llm_response, _messages}, elapsed) do
+  def build_send_result(result, elapsed, max_iterations \\ nil)
+
+  def build_send_result({:ok, llm_response, _messages}, elapsed, _max_iterations) do
     text = llm_response.content || ""
 
     metadata =
@@ -122,15 +131,15 @@ defmodule LlmCore.LLM.Native do
     {:ok, Response.new(content: text, provider: :native, metadata: metadata)}
   end
 
-  def build_send_result({:error, :max_iterations_reached}, _elapsed) do
+  def build_send_result({:error, :max_iterations_reached}, _elapsed, max_iterations) do
     {:error,
      Error.new(:provider_error,
-       message: "Iteration limit reached (#{@max_iterations})",
+       message: "Iteration limit reached (#{max_iterations || @max_iterations})",
        provider: :native
      )}
   end
 
-  def build_send_result({:error, {:empty_stop, details}}, _elapsed)
+  def build_send_result({:error, {:empty_stop, details}}, _elapsed, _max_iterations)
       when is_map(details) do
     {:error,
      Error.new(:provider_error,
@@ -144,7 +153,8 @@ defmodule LlmCore.LLM.Native do
 
   def build_send_result(
         {:error, {:cascade_exhausted, %{last: last, attempts: attempts} = details}},
-        _elapsed
+        _elapsed,
+        _max_iterations
       ) do
     tried =
       Enum.map_join(attempts, "; ", fn %{provider: mod, reason: reason} ->
@@ -163,7 +173,8 @@ defmodule LlmCore.LLM.Native do
 
   def build_send_result(
         {:error, {:crashed, %{provider: mod, exception: exception, kind: kind} = details}},
-        _elapsed
+        _elapsed,
+        _max_iterations
       ) do
     {:error,
      Error.new(:provider_error,
@@ -173,7 +184,11 @@ defmodule LlmCore.LLM.Native do
      )}
   end
 
-  def build_send_result({:error, {:no_native_provider, %{reason: reason} = details}}, _elapsed) do
+  def build_send_result(
+        {:error, {:no_native_provider, %{reason: reason} = details}},
+        _elapsed,
+        _max_iterations
+      ) do
     {:error,
      Error.new(:provider_error,
        message:
@@ -185,7 +200,7 @@ defmodule LlmCore.LLM.Native do
      )}
   end
 
-  def build_send_result({:error, reason}, _elapsed) do
+  def build_send_result({:error, reason}, _elapsed, _max_iterations) do
     {:error,
      Error.new(:provider_error,
        message: "Native dispatch error: #{inspect(reason)}",
@@ -211,9 +226,9 @@ defmodule LlmCore.LLM.Native do
 
   # ── Execution ──────────────────────────────────────────────
 
-  defp do_send(prompt, cwd, agent_file, model, timeout, llm_provider, resolve_tool)
+  defp do_send(prompt, cwd, agent_file, model, timeout, llm_provider, overrides)
 
-  defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider, resolve_tool) do
+  defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider, overrides) do
     system_prompt = load_agent_prompt(agent_file)
 
     with {:ok, candidates} <- resolve_candidates(model, llm_provider) do
@@ -222,12 +237,17 @@ defmodule LlmCore.LLM.Native do
         %{role: :user, content: prompt}
       ]
 
-      tools = CodeTools.available_tools()
+      # Callers may supply their own toolset and executor (e.g. a persona's
+      # resolved tool_refs); the LlmToolkit CodeTools remain the default so
+      # existing callers are unaffected.
+      tools = overrides[:tools] || CodeTools.available_tools()
+      resolve_tool = overrides[:resolve_tool] || (&CodeTools.resolve(&1, cwd))
+      max_iterations = overrides[:max_iterations] || @max_iterations
 
       run_fn = fn {provider, resolved_model, provider_opts} ->
         llm_send = build_llm_send(provider, resolved_model, provider_opts)
 
-        Loop.run(messages, llm_send, loop_options(tools, cwd, resolve_tool))
+        Loop.run(messages, llm_send, loop_options(tools, cwd, resolve_tool, max_iterations))
       end
 
       try_cascade(candidates, run_fn)
@@ -238,12 +258,12 @@ defmodule LlmCore.LLM.Native do
   # function) replaces the default, which runs the code tools directly in `cwd`.
   # `@doc false` public for direct testing.
   @doc false
-  @spec loop_options(list(), String.t(), (term() -> term()) | nil) :: keyword()
-  def loop_options(tools, cwd, resolve_tool) do
+  @spec loop_options(list(), String.t(), (term() -> term()) | nil, pos_integer() | nil) :: keyword()
+  def loop_options(tools, cwd, resolve_tool, max_iterations \\ nil) do
     [
       tools: tools,
       resolve_tool: resolve_tool || (&CodeTools.resolve(&1, cwd)),
-      max_iterations: @max_iterations
+      max_iterations: max_iterations || @max_iterations
     ]
   end
 
