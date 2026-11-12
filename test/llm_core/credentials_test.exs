@@ -214,9 +214,23 @@ defmodule LlmCore.CredentialsTest do
     end
 
     test "without one, the default executor runs the code tools in cwd" do
-      opts = Native.loop_options([], "/tmp", nil)
+      dir =
+        Path.join(System.tmp_dir!(), "llm_core-native-cwd-#{System.unique_integer([:positive])}")
 
-      assert is_function(opts[:resolve_tool], 1)
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "marker.txt"), "the-cwd-marker")
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      opts = Native.loop_options([], dir, nil)
+
+      call = %LlmToolkit.Tool.Call{
+        id: "c1",
+        name: "read_file",
+        arguments: %{"path" => "marker.txt"}
+      }
+
+      assert {:ok, text} = opts[:resolve_tool].(call)
+      assert text =~ "the-cwd-marker"
       assert Keyword.has_key?(opts, :max_iterations)
     end
   end

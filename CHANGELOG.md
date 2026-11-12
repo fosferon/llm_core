@@ -11,7 +11,8 @@ All notable changes to this project will be documented in this file.
   environment. The resolver is called with the name of the environment variable that would have held the
   key (`apply(module, function, [name | extra_args])`) and returns the value or `nil`, at use time and with
   nothing cached. The default, `{System, :get_env, []}`, is the previous behaviour, so nothing changes
-  for applications that do not configure it.
+  for applications that do not configure it. The resolver is also called while llm_core starts, before
+  the host's own processes exist, so it must not depend on them.
   Every credential read goes through it: the native provider router, the configuration loader's
   `api_key_present` check, `LlmCore.LLM.OpenAI` and `LlmCore.LLM.Anthropic` (including `available?/0,1`),
   and the Hindsight memory client (its configuration, write buffer and asynchronous retain).

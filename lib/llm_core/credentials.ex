@@ -12,6 +12,11 @@ defmodule LlmCore.Credentials do
   string, or `nil` when it has none. It is called at use time, every time, and nothing is cached here, so a
   credential the host rotates is used from the next call on.
 
+  It is also called **while llm_core itself starts**: the configuration loader checks each provider's
+  credential when the application boots, before the host application's own processes exist. So a resolver
+  must answer without depending on the host's processes. For example, it can read a boot-time seed that the
+  host writes during configuration, before any of its own GenServer or ETS table is running.
+
   Every place in llm_core that reads a credential by name goes through `lookup/1`: the native provider
   router and the configuration loader's presence check, the OpenAI and Anthropic modules, and the Hindsight
   memory client (its configuration, its write buffer and the asynchronous retain pipeline).
