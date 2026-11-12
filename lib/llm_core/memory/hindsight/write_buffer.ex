@@ -28,7 +28,9 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
           buffer_size: non_neg_integer(),
           flush_pending: boolean(),
           timer_ref: reference() | nil,
-          retry_count: non_neg_integer()
+          retry_count: non_neg_integer(),
+          # Buffered API keys, `{id, api_key}`, in a `:private` table owned by the buffer (never in the state).
+          keys: :ets.tid()
         }
 
   # Client API
@@ -83,6 +85,38 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
 
   # Server callbacks
 
+  # Buffered API keys never live in the GenServer state: they are held in a private ETS table owned by this
+  # process (`state.keys`), and an item carries only a reference to its key. So the state, which a crash
+  # report prints (also inside the stacktrace, as a callback argument) and `:sys.get_status/1` returns,
+  # holds no key value. On top of that, `format_status/1` shows the buffer as persisted
+  # (`redact_credential/1`, for items restored or injected in an older shape), replaces the last message (a
+  # `{:buffer, ..., api_key, url}` cast carries one) and clears the `:sys` log (its entries carry
+  # messages). It is total: on any failure it returns the status with those three entries replaced.
+  # Only the keys the status already has are touched.
+  @impl true
+  def format_status(status) do
+    status
+    |> update_present(:state, &redact_state/1)
+    |> redact_message_and_log()
+  rescue
+    _ -> status |> update_present(:state, fn _ -> :redacted end) |> redact_message_and_log()
+  end
+
+  defp redact_message_and_log(status) do
+    status
+    |> update_present(:message, fn _ -> :redacted end)
+    |> update_present(:log, fn _ -> [] end)
+  end
+
+  defp redact_state(%{buffer: buffer} = state) when is_list(buffer),
+    do: %{state | buffer: Enum.map(buffer, &redact_credential/1)}
+
+  defp redact_state(other), do: other
+
+  defp update_present(map, key, fun) do
+    if Map.has_key?(map, key), do: Map.update!(map, key, fun), else: map
+  end
+
   @impl true
   def init(_opts) do
     # A supervised shutdown sends :shutdown; without trapping exits the VM
@@ -102,21 +136,26 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
        buffer_size: length(buffer),
        flush_pending: false,
        timer_ref: timer_ref,
-       retry_count: 0
+       retry_count: 0,
+       # Buffered API keys, by reference (see `format_status/1`); private to this process.
+       keys: :ets.new(:hindsight_buffer_keys, [:set, :private])
      }}
   end
 
   @impl true
   def handle_cast({:buffer, content, metadata, bank_id, api_key, url}, state) do
+    id = System.unique_integer([:positive, :monotonic])
+    absent? = api_key in [nil, ""]
+    unless absent?, do: :ets.insert(state.keys, {id, api_key})
+
     item = %{
-      id: System.unique_integer([:positive, :monotonic]),
+      id: id,
       content: content,
       metadata: metadata,
       timestamp: DateTime.to_iso8601(DateTime.utc_now()),
       project_id: get_project_id(),
       bank_id: bank_id,
-      api_key: api_key,
-      credential_state: if(api_key in [nil, ""], do: :absent, else: :resolved),
+      credential_state: if(absent?, do: :absent, else: :resolved),
       url: url
     }
 
@@ -137,6 +176,21 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
      }}
   end
 
+  # An unexpected cast is dropped rather than crashing the buffer; only its shape is logged.
+  def handle_cast(request, state) do
+    Logger.warning("Hindsight write buffer: unexpected cast #{message_shape(request)}")
+    {:noreply, state}
+  end
+
+  defp message_shape(request) when is_tuple(request) and tuple_size(request) > 0 do
+    tag = elem(request, 0)
+    tag = if is_atom(tag), do: inspect(tag), else: "?"
+    "{#{tag}, ...}/#{tuple_size(request)}"
+  end
+
+  defp message_shape(request) when is_atom(request), do: inspect(request)
+  defp message_shape(_request), do: "(other)"
+
   @impl true
   def handle_call(:flush, _from, state) do
     {reply, state} = flush_state(state, :all)
@@ -150,7 +204,15 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
 
   @impl true
   def handle_call(:clear_buffer, _from, state) do
+    :ets.delete_all_objects(state.keys)
     {:reply, :ok, %{state | buffer: [], buffer_size: 0, flush_pending: false}}
+  end
+
+  # An unexpected call is refused rather than crashing the buffer (a `FunctionClauseError` would carry the
+  # state, buffered keys included). Only the message's shape is logged.
+  def handle_call(request, _from, state) do
+    Logger.warning("Hindsight write buffer: unexpected call #{message_shape(request)}")
+    {:reply, {:error, :unknown_call}, state}
   end
 
   @impl true
@@ -239,8 +301,9 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
   defp flush_state(state, limit) do
     items = take_oldest(state.buffer, limit)
 
-    case do_flush(items) do
+    case do_flush(items, state.keys) do
       {:ok, sent_ids} ->
+        forget_keys(state.keys, sent_ids)
         remaining = reject_sent(state.buffer, sent_ids)
 
         {:ok,
@@ -253,6 +316,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
          }}
 
       {:error, reason, sent_ids} ->
+        forget_keys(state.keys, sent_ids)
         remaining = reject_sent(state.buffer, sent_ids)
 
         {{:error, reason},
@@ -264,9 +328,11 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     end
   end
 
-  defp do_flush([]), do: {:ok, MapSet.new()}
+  defp forget_keys(keys, sent_ids), do: Enum.each(sent_ids, &:ets.delete(keys, &1))
 
-  defp do_flush(buffer) do
+  defp do_flush([], _keys), do: {:ok, MapSet.new()}
+
+  defp do_flush(buffer, keys) do
     fallback_url = Config.effective_url()
 
     buffer
@@ -274,7 +340,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
       &{
         Map.get(&1, :url) || Map.get(&1, "url") || fallback_url,
         Map.get(&1, :bank_id) || Map.get(&1, "bank_id"),
-        credential(&1)
+        credential(&1, keys)
       }
     )
     |> Enum.sort_by(fn {{url, bank_id, _api_key}, _items} ->
@@ -315,10 +381,14 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
       {:legacy, Map.get(item, :timestamp) || Map.get(item, "timestamp"), :erlang.phash2(item)}
   end
 
-  defp credential(item) do
-    api_key = fetch_item(item, :api_key)
+  # A current item's key is in the keys table under its id; an item in an older shape may still carry
+  # `api_key` itself (restored items never do: they are persisted redacted).
+  defp credential(item, keys) do
+    api_key = fetch_item(item, :api_key) || held_key(keys, item_id(item))
 
     case fetch_item(item, :credential_state) do
+      :resolved when api_key in [nil, ""] -> {:missing, item_id(item)}
+      "resolved" when api_key in [nil, ""] -> {:missing, item_id(item)}
       :resolved -> api_key
       "resolved" -> api_key
       :absent -> nil
@@ -330,12 +400,21 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     end
   end
 
-  defp fetch_item(item, key) do
+  defp held_key(keys, id) do
+    case :ets.lookup(keys, id) do
+      [{^id, api_key}] -> api_key
+      [] -> nil
+    end
+  end
+
+  defp fetch_item(item, key) when is_map(item) do
     case Map.fetch(item, key) do
       {:ok, value} -> value
       :error -> Map.get(item, Atom.to_string(key))
     end
   end
+
+  defp fetch_item(_item, _key), do: nil
 
   defp send_batch(base_url, bank_id, items, api_key) do
     config = Config.effective_config()
@@ -430,6 +509,8 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     _ -> []
   end
 
+  defp redact_credential(item) when not is_map(item), do: item
+
   defp redact_credential(item) do
     state =
       case {fetch_item(item, :credential_state), fetch_item(item, :api_key)} do
@@ -442,6 +523,7 @@ defmodule LlmCore.Memory.Hindsight.WriteBuffer do
     item
     |> Map.delete(:api_key)
     |> Map.delete("api_key")
+    |> Map.delete("credential_state")
     |> Map.put(:credential_state, state)
   end
 end

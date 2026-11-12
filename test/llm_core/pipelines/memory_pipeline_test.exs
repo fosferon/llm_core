@@ -63,8 +63,18 @@ defmodule LlmCore.Pipelines.MemoryPipelineTest do
     Process.sleep(10)
 
     [item] = :sys.get_state(WriteBuffer).buffer
-    assert item.api_key == "resolved-retain-key"
     assert item.credential_state == :resolved
+    refute Map.has_key?(item, :api_key)
+
+    # The key is held outside the state, in a table private to the buffer process; read it there.
+    test_pid = self()
+
+    :sys.replace_state(WriteBuffer, fn state ->
+      send(test_pid, {:held_key, :ets.lookup(state.keys, item.id)})
+      state
+    end)
+
+    assert_receive {:held_key, [{_id, "resolved-retain-key"}]}
   end
 
   test "retain_async no-ops when Hindsight unavailable" do

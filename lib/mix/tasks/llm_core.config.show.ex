@@ -41,7 +41,8 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
     Loader.reload_providers(path_opts)
 
     section = opts[:section] |> to_section()
-    payload = fetch_section(section, opts)
+    # Secret values (inline keys, interpolated `${VAR}` values) are never printed.
+    payload = section |> fetch_section(opts) |> LlmCore.Config.Redact.config()
 
     if opts[:json] do
       Mix.shell().info(Jason.encode!(payload, pretty: true))
@@ -139,7 +140,9 @@ defmodule Mix.Tasks.LlmCore.Config.Show do
       Mix.shell().info("No providers configured")
     else
       Enum.each(list, fn provider ->
-        Mix.shell().info("- #{provider.id} (#{provider.module}) -> #{inspect(provider.aliases)}")
+        # A CLI provider has no module; it is shown by kind.
+        kind = Map.get(provider, :module) || Map.get(provider, :kind)
+        Mix.shell().info("- #{provider.id} (#{kind}) -> #{inspect(provider.aliases)}")
       end)
     end
   end

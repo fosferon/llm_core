@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.6 — 2026-11-12
+
+### Security
+
+- `mix llm_core.config.show` no longer prints secret values, in any section or in `--json` output.
+  Values under secret-named keys (`api_key(s)`, `apikey(s)`, `key(s)`, `token`, `secret(s)`, `password`,
+  `passwd`, `credential(s)`, `auth`, `authorization`, `bearer`, as the whole key or its ending after `_`
+  or `-`; `tokens` only as the whole key) are shown as `"[redacted]"`, whether written inline or
+  interpolated from `${VAR}`; a secret-named key holding a table keeps its shape with every value inside
+  redacted. Under any key, a `Bearer` token (16 or more token characters) and the password in a URL are
+  scrubbed. Keys ending in `_env` are shown while their value is a variable name, and redacted
+  otherwise. A table whose own name ends in one of these words is shown with its values redacted.
+- `mix llm_core.config.set` no longer echoes a value set under a secret-named path. It prints
+  `New value: "[redacted]"`, and other values are echoed as before, with any nested secrets redacted.
+- `LlmCore.Memory.Hindsight.WriteBuffer` no longer keeps buffered API keys in its process state: they are
+  held in a table private to the buffer process, and a buffered item carries only a reference. So the
+  state that a crash report prints (including as a callback argument in its stacktrace) and that
+  `:sys.get_status/1` and `:sys.get_state/1` return holds no key. `format_status/1` also replaces the last
+  message (a buffering request carries a key) with `:redacted`, clears the `:sys` event log, and shows
+  items restored or injected in an older shape without their key; it cannot fail. An unexpected call or
+  cast is refused or dropped (logged by its shape only) instead of crashing the buffer. Residual: a raise
+  inside code that receives a key as an argument (the buffering cast, whose message carries it, or the
+  flush of the batch being sent) could still show that key in the crash report's stacktrace; neither
+  path has a known trigger.
+- `LlmCore.Config.Redact` is the shared helper (`secret_key?/1`, `config/1`, `path_value/2`).
+
+### Fixed
+
+- `mix llm_core.config.set` raised `BadMapError` on every run when it read its `--reload` option.
+- `mix llm_core.config.show --section providers` raised `KeyError` for a CLI provider, which has no
+  module. Such a provider is now listed by its kind.
+
 ## 0.9.5 — 2026-11-12
 
 ### Added

@@ -1,7 +1,7 @@
 defmodule LlmCore.MixProject do
   use Mix.Project
 
-  @version "0.9.5"
+  @version "0.9.6"
   @source_url "https://github.com/fosferon/llm_core"
 
   def project do
@@ -82,7 +82,12 @@ defmodule LlmCore.MixProject do
           LlmCore.Router.RoutingTable,
           LlmCore.Router.RouteEntry
         ],
-        Configuration: [LlmCore.Config.Store, LlmCore.Config.Loader, LlmCore.Config.Watcher],
+        Configuration: [
+          LlmCore.Config.Store,
+          LlmCore.Config.Loader,
+          LlmCore.Config.Watcher,
+          LlmCore.Config.Redact
+        ],
         "Agent Loop": [
           LlmCore.Agent,
           LlmCore.Agent.Loop,

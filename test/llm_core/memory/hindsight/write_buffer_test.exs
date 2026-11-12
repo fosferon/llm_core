@@ -40,6 +40,68 @@ defmodule LlmCore.Memory.Hindsight.WriteBufferTest do
     assert {:trap_exit, true} = Process.info(Process.whereis(WriteBuffer), :trap_exit)
   end
 
+  describe "format_status/1 (a crash report or :sys.get_status never shows a buffered key)" do
+    test "the buffer shows the credential state, not the key" do
+      WriteBuffer.buffer("content", %{}, bank_id: "bank1", api_key: "synthetic-secret-0003")
+      assert WriteBuffer.buffer_size() == 1
+
+      status = :sys.get_status(WriteBuffer)
+      refute inspect(status, limit: :infinity) =~ "synthetic-secret-0003"
+      assert inspect(status, limit: :infinity) =~ ":redacted"
+    end
+
+    test "the crashing message and the :sys log are replaced" do
+      out =
+        WriteBuffer.format_status(%{
+          state: %{buffer: [%{api_key: "synthetic-secret-0004", credential_state: :resolved}]},
+          message: {:"$gen_cast", {:buffer, "c", %{}, "bank1", "synthetic-secret-0004", nil}},
+          log: [
+            {:in, {:"$gen_cast", {:buffer, "c", %{}, "bank1", "synthetic-secret-0004", nil}}}
+          ]
+        })
+
+      refute inspect(out, limit: :infinity) =~ "synthetic-secret-0004"
+      assert out.message == :redacted
+      assert out.log == []
+    end
+
+    test "the state never holds a buffered key, so no crash report can print one" do
+      WriteBuffer.buffer("content", %{}, bank_id: "bank1", api_key: "synthetic-secret-0005")
+      assert WriteBuffer.buffer_size() == 1
+
+      # The raw state (what a crash report prints, also as a callback argument in its stacktrace).
+      refute inspect(:sys.get_state(WriteBuffer), limit: :infinity) =~ "synthetic-secret-0005"
+    end
+
+    test "format_status/1 is total: a malformed buffer element still redacts message and log" do
+      out =
+        WriteBuffer.format_status(%{
+          state: %{buffer: ["not-a-map", 123, nil]},
+          message: {:"$gen_cast", {:buffer, "c", %{}, "b", "synthetic-secret-0007", nil}},
+          log: [:x]
+        })
+
+      refute inspect(out, limit: :infinity) =~ "synthetic-secret-0007"
+      assert out.message == :redacted
+      assert out.log == []
+    end
+
+    test "only the keys the status has are returned" do
+      assert WriteBuffer.format_status(%{state: %{buffer: []}}) == %{state: %{buffer: []}}
+    end
+
+    test "an unexpected call or cast does not crash the buffer" do
+      pid = Process.whereis(WriteBuffer)
+
+      assert {:error, :unknown_call} =
+               GenServer.call(WriteBuffer, {:no_such_call, "synthetic-secret-0006"})
+
+      GenServer.cast(WriteBuffer, {:no_such_cast, "synthetic-secret-0006"})
+      assert WriteBuffer.buffer_size() == 0
+      assert Process.whereis(WriteBuffer) == pid
+    end
+  end
+
   describe "build_headers/2" do
     test "returns no auth header when no key is configured and no api_key is passed" do
       System.delete_env("HINDSIGHT_API_KEY")

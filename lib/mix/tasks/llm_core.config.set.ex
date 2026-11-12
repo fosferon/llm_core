@@ -57,11 +57,19 @@ defmodule Mix.Tasks.LlmCore.Config.Set do
 
     Mix.shell().info("Updated #{path} in #{file}")
 
-    if Map.get(opts, :reload, true) do
+    # OptionParser returns a keyword list (Map.get on it raised on every run).
+    if Keyword.get(opts, :reload, true) do
       Loader.reload_providers(path: file)
     end
 
-    Mix.shell().info("New value: #{inspect(get_in(new_config, path_segments(path)))}")
+    # A secret set under a secret-named key is never echoed back.
+    new_value =
+      LlmCore.Config.Redact.path_value(
+        path_segments(path),
+        get_in(new_config, path_segments(path))
+      )
+
+    Mix.shell().info("New value: #{inspect(new_value)}")
   end
 
   defp decode_value(opts) do

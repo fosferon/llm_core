@@ -253,6 +253,8 @@ mix llm_core.config.set --path telemetry.sample_rate --value 0.25 --type float
 mix llm_core.config.validate
 ```
 
+`config.show` and `config.set` never print secret values; they are shown as `[redacted]`.
+
 See the [Configuration Guide](https://hexdocs.pm/llm_core/configuration.html) for the full TOML schema, environment variable interpolation, and agent registration rules.
 
 ## Architecture

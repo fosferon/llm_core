@@ -287,6 +287,14 @@ mix llm_core.config.show --section routing --json
 `--section` accepts `summary`, `providers`, `routing`, `memory`, `telemetry`,
 or `raw`. Use `--provider claude` to filter aliases.
 
+Secret values are never printed, in any section or with `--json`: values under secret-named keys
+(`api_key`, `api_keys`, `apikey`, `apikeys`, `key`, `keys`, `token`, `secret`, `secrets`, `password`, `passwd`,
+`credential`, `credentials`, `auth`, `authorization`, `bearer`, as the whole key or its ending after `_`
+or `-`; `tokens` only as the whole key), values interpolated from `${VAR}` under such keys, `Bearer`
+tokens (16 or more token characters) and the password in a URL are shown as `[redacted]`. Keys ending
+in `_env` are shown while their value is a variable name. `mix llm_core.config.set` does not echo a value it set under a secret-named path.
+See `LlmCore.Config.Redact`.
+
 ### Editing configuration
 
 ```bash
