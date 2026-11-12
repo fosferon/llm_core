@@ -22,7 +22,8 @@ defmodule LlmCore.LLM.OpenAI do
 
   1. `opts[:api_key]` (per-call)
   2. `Application.get_env(:llm_core, :openai_api_key)`
-  3. `System.get_env("OPENAI_API_KEY")`
+  3. the credential `OPENAI_API_KEY`, through `LlmCore.Credentials.lookup/1` (the OS environment
+     by default; see `LlmCore.Credentials` for a host-supplied resolver)
 
   ## URL Resolution Order
 
@@ -233,7 +234,7 @@ defmodule LlmCore.LLM.OpenAI do
 
   defp api_key do
     Application.get_env(:llm_core, :openai_api_key) ||
-      System.get_env("OPENAI_API_KEY")
+      LlmCore.Credentials.lookup("OPENAI_API_KEY")
   end
 
   defp completions_url(opts) do

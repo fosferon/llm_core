@@ -29,6 +29,16 @@ defmodule LlmCore.LLM.Native do
         cwd: "/path/to/project",
         model: "claude-3-5-sonnet"
       )
+
+  ## Tool execution
+
+  The agent loop runs the code tools itself, in `cwd`, through
+  `LlmToolkit.CodeTools.resolve/2`. A host that runs tools its own way (for
+  example in a sandbox, or with a reduced environment) passes a one-argument
+  executor as `resolve_tool:`. It receives each `LlmToolkit.Tool.Call` and
+  returns what `LlmToolkit.CodeTools.resolve/2` would:
+
+      LlmCore.LLM.Native.send(task, cwd: dir, resolve_tool: &MyApp.Tools.run/1)
   """
 
   @behaviour LlmCore.LLM.Provider
@@ -77,7 +87,7 @@ defmodule LlmCore.LLM.Native do
 
     result =
       try do
-        do_send(prompt, cwd, agent_file, model, timeout, llm_provider)
+        do_send(prompt, cwd, agent_file, model, timeout, llm_provider, opts[:resolve_tool])
       rescue
         e ->
           {:error, "Native dispatch crashed: #{Exception.message(e)}"}
@@ -201,9 +211,9 @@ defmodule LlmCore.LLM.Native do
 
   # ── Execution ──────────────────────────────────────────────
 
-  defp do_send(prompt, cwd, agent_file, model, timeout, llm_provider)
+  defp do_send(prompt, cwd, agent_file, model, timeout, llm_provider, resolve_tool)
 
-  defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider) do
+  defp do_send(prompt, cwd, agent_file, model, _timeout, llm_provider, resolve_tool) do
     system_prompt = load_agent_prompt(agent_file)
 
     with {:ok, candidates} <- resolve_candidates(model, llm_provider) do
@@ -217,17 +227,24 @@ defmodule LlmCore.LLM.Native do
       run_fn = fn {provider, resolved_model, provider_opts} ->
         llm_send = build_llm_send(provider, resolved_model, provider_opts)
 
-        Loop.run(
-          messages,
-          llm_send,
-          tools: tools,
-          resolve_tool: &CodeTools.resolve(&1, cwd),
-          max_iterations: @max_iterations
-        )
+        Loop.run(messages, llm_send, loop_options(tools, cwd, resolve_tool))
       end
 
       try_cascade(candidates, run_fn)
     end
+  end
+
+  # The agent loop's options. A caller-supplied tool executor (`opts[:resolve_tool]`, a one-argument
+  # function) replaces the default, which runs the code tools directly in `cwd`.
+  # `@doc false` public for direct testing.
+  @doc false
+  @spec loop_options(list(), String.t(), (term() -> term()) | nil) :: keyword()
+  def loop_options(tools, cwd, resolve_tool) do
+    [
+      tools: tools,
+      resolve_tool: resolve_tool || (&CodeTools.resolve(&1, cwd)),
+      max_iterations: @max_iterations
+    ]
   end
 
   @doc """

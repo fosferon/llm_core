@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.5 — 2026-11-12
+
+### Added
+
+- `LlmCore.Credentials` and `config :llm_core, :key_resolver, {module, function, extra_args}`: a host
+  application can supply its own credential resolver, so that provider keys need not live in the OS
+  environment. The resolver is called with the name of the environment variable that would have held the
+  key (`apply(module, function, [name | extra_args])`) and returns the value or `nil`, at use time and with
+  nothing cached. The default, `{System, :get_env, []}`, is the previous behaviour, so nothing changes
+  for applications that do not configure it.
+  Every credential read goes through it: the native provider router, the configuration loader's
+  `api_key_present` check, `LlmCore.LLM.OpenAI` and `LlmCore.LLM.Anthropic` (including `available?/0,1`),
+  and the Hindsight memory client (its configuration, write buffer and asynchronous retain).
+  `${VAR}` interpolation in configuration files still reads the OS environment, so a configured resolver
+  never copies a credential into the loaded configuration.
+- `LlmCore.LLM.Native.send/2` honours `resolve_tool:`, a one-argument tool executor that replaces the
+  default (`LlmToolkit.CodeTools.resolve/2` run in `cwd`). A host can run the agent loop's tools its own
+  way, for example in a sandbox or with a reduced environment.
+
 ## 0.9.4 — 2026-11-08
 
 ### Changed

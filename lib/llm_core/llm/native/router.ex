@@ -330,7 +330,7 @@ defmodule LlmCore.LLM.Native.Router do
   end
 
   defp resolve_api_key(%{"api_key_env" => env} = auth) when is_binary(env) do
-    case System.get_env(env) do
+    case LlmCore.Credentials.lookup(env) do
       nil -> Map.get(auth, "api_key")
       key -> key
     end

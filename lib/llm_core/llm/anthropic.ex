@@ -528,7 +528,7 @@ defmodule LlmCore.LLM.Anthropic do
   end
 
   defp api_key do
-    System.get_env("ANTHROPIC_API_KEY") ||
+    LlmCore.Credentials.lookup("ANTHROPIC_API_KEY") ||
       Application.get_env(:llm_core, :anthropic_api_key)
   end
 

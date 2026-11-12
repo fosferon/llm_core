@@ -209,7 +209,7 @@ defmodule LlmCore.Pipelines.MemoryPipeline do
 
     api_key =
       case Keyword.get(opts, :api_key) do
-        value when value in [nil, ""] -> System.get_env(ctx.config.api_key_env)
+        value when value in [nil, ""] -> LlmCore.Credentials.lookup(ctx.config.api_key_env)
         value -> value
       end
 

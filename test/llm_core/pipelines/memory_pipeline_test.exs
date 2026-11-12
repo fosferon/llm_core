@@ -40,6 +40,33 @@ defmodule LlmCore.Pipelines.MemoryPipelineTest do
     assert WriteBuffer.buffer_size() == 1
   end
 
+  test "retain_async resolves the key through the configured credential resolver" do
+    defmodule ResolverStub do
+      def fetch("HINDSIGHT_API_KEY"), do: "resolved-retain-key"
+      def fetch(_), do: nil
+    end
+
+    previous = Application.get_env(:llm_core, :key_resolver)
+    Application.put_env(:llm_core, :key_resolver, {ResolverStub, :fetch, []})
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:llm_core, :key_resolver, previous),
+        else: Application.delete_env(:llm_core, :key_resolver)
+    end)
+
+    System.delete_env("HINDSIGHT_API_KEY")
+    Config.set_runtime_override(%{enabled: true})
+    System.put_env("HINDSIGHT_URL", "http://localhost:9999/mcp")
+
+    assert :ok = Memory.retain("hello", %{type: :note})
+    Process.sleep(10)
+
+    [item] = :sys.get_state(WriteBuffer).buffer
+    assert item.api_key == "resolved-retain-key"
+    assert item.credential_state == :resolved
+  end
+
   test "retain_async no-ops when Hindsight unavailable" do
     Config.set_runtime_override(%{enabled: false})
 

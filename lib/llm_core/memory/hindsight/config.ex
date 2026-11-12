@@ -232,12 +232,13 @@ defmodule LlmCore.Memory.Hindsight.Config do
   end
 
   @doc """
-  Returns the API key for authentication (from configured env var).
+  Returns the API key for authentication: the credential named by the configured `api_key_env`,
+  resolved through `LlmCore.Credentials.lookup/1`.
   """
   @spec get_api_key() :: String.t() | nil
   def get_api_key do
     config = effective_config()
-    System.get_env(config.api_key_env)
+    LlmCore.Credentials.lookup(config.api_key_env)
   end
 
   @doc """

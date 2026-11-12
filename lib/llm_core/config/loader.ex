@@ -1001,7 +1001,8 @@ defmodule LlmCore.Config.Loader do
   end
 
   defp env_present?(nil), do: false
-  defp env_present?(env), do: System.get_env(env) not in [nil, ""]
+  # The presence check follows the configured credential resolver, not the raw OS environment.
+  defp env_present?(env), do: LlmCore.Credentials.lookup(env) not in [nil, ""]
 
   defp blank_to_nil(value) when is_binary(value) do
     case String.trim(value) do
