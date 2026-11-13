@@ -2,6 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
+<<<<<<< HEAD
 ## 0.9.6 — 2026-11-12
 
 ### Security
@@ -53,6 +54,28 @@ All notable changes to this project will be documented in this file.
 - `LlmCore.LLM.Native.send/2` honours `resolve_tool:`, a one-argument tool executor that replaces the
   default (`LlmToolkit.CodeTools.resolve/2` run in `cwd`). A host can run the agent loop's tools its own
   way, for example in a sandbox or with a reduced environment.
+=======
+## Unreleased
+
+### Added
+
+- `LlmCore.LLM.Native.send/2` accepts `:tools`, `:resolve_tool` and
+  `:max_iterations` overrides. The `LlmToolkit.CodeTools` set and the module
+  default iteration cap remain the defaults, so existing callers are
+  unaffected; callers that resolve their own toolset (e.g. a persona's
+  `tool_refs` via gc_daemon's AgentTools) no longer need a separate loop
+  implementation to get their tools into the native agentic loop (GC-82).
+
+### Fixed
+
+- `LlmCore.LLM.Anthropic.send/2` and `stream/2` honor per-provider
+  credentials passed as `:api_key` or `:api_key_env` opts. Previously only
+  `available?/1` consulted the TOML auth map, so alias providers (e.g.
+  `zai_anthropic` with `api_key_env = "ZAI_API_KEY"`) passed the
+  availability check and then failed at send time with
+  "ANTHROPIC_API_KEY not set" (GC-68). The auth error now names the
+  environment variable that was tried.
+>>>>>>> 0aaa5e8 (feat(native): pluggable toolset opts; fix(anthropic): per-provider send-time credentials)
 
 ## 0.9.4 — 2026-11-08
 
