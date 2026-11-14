@@ -173,17 +173,28 @@ defmodule LlmCore.Tool.Codec do
 
   # `function` must be an object; a scalar there would send `function["arguments"]`
   # into Access.get/3 with no matching clause. Anything else is the unknown call.
-  defp decode_openai_call(%{"id" => id, "function" => function}) when is_map(function) do
+  defp decode_openai_call(%{"function" => function} = call) when is_map(function) do
     arguments = parse_arguments(function["arguments"])
 
     %Call{
-      id: id,
+      id: call_id(call),
       name: function["name"],
       arguments: arguments
     }
   end
 
   defp decode_openai_call(_), do: %Call{id: nil, name: "unknown", arguments: %{}}
+
+  # Some OpenAI-compatible backends omit "id" on tool calls (kimi's coding
+  # endpoint: the missing id round-tripped as an empty "tool_call_id" and the
+  # backend rejected the follow-up with "tool_call_id  is not found" — GC-12).
+  # Synthesize a unique id at decode so the assistant message and its tool
+  # result agree; provided ids pass through untouched.
+  defp call_id(%{"id" => id}) when is_binary(id) and id != "", do: id
+
+  defp call_id(_call) do
+    "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
+  end
 
   # ---------------------------------------------------------------------------
   # Private — Anthropic
